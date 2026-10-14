@@ -1,0 +1,32 @@
+# Full sidecar dependency set from the v1.0 plan.
+# Heavy packages are listed here but must be imported lazily (inside call
+# paths). Importing app.main must not load torch or FlagEmbedding.
+
+-r requirements-core.txt
+
+openai==1.54.4
+tiktoken==0.8.0
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+lxml==5.3.0
+APScheduler==3.10.4
+keyring==25.5.0
+loguru==0.7.2
+numpy==1.26.4
+sqlite-vec==0.1.6
+pytest==8.3.3
+pytest-asyncio==0.24.0
+
+# Local embedding / rerank. Do not import at process startup.
+FlagEmbedding==1.2.11
+transformers==4.44.2
+# CUDA wheel, when needed:
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1
+
+# Packaging and browser automation. Not imported by the API process.
+playwright==1.48.0
+pyinstaller==6.11.1
+
+# Optional overseas protocol adapter (v1.0 marks this optional):
+# litellm==1.52.9

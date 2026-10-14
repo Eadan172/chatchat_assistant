@@ -1,0 +1,23 @@
+appId: com.local.zhihu-connect-engine
+productName: 知识引擎
+directories:
+  output: ../../release
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: ../../services/sidecar
+    to: sidecar
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/.venv/**"
+win:
+  target: [nsis]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+linux:
+  target: [AppImage]
+  category: Utility
