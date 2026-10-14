@@ -1,0 +1,1 @@
+"""Content-hash comparison placeholder."""
