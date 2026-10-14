@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { features } from '../../shared/features'
-import { ClarifyPlaceholder } from './components/clarify/ClarifyPlaceholder'
+import { features, flagEnabled } from '../../shared/features'
+import { ClarifyPanel } from './components/clarify/ClarifyPanel'
 import { VerifyPlaceholder } from './components/verify/VerifyPlaceholder'
 
 interface HealthState {
@@ -8,6 +8,8 @@ interface HealthState {
   version?: string
   error?: string
 }
+
+const clarifyOn = flagEnabled('clarify', import.meta.env.VITE_FEATURE_CLARIFY)
 
 export function App() {
   const [health, setHealth] = useState<HealthState | null>(null)
@@ -20,7 +22,7 @@ export function App() {
   return (
     <main
       className="min-h-screen bg-mist text-ink"
-      data-clarify={String(features.clarify)}
+      data-clarify={String(clarifyOn)}
       data-jev={String(features.jev)}
       data-verify={String(features.verify)}
     >
@@ -38,7 +40,7 @@ export function App() {
             {health && !health.ok && (health.error ?? '未连接')}
           </p>
         </section>
-        {features.clarify ? <ClarifyPlaceholder /> : null}
+        {clarifyOn ? <ClarifyPanel /> : null}
         {features.verify ? <VerifyPlaceholder /> : null}
       </div>
     </main>

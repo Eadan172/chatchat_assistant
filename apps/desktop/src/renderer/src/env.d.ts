@@ -10,9 +10,22 @@ interface DesktopHealth {
 interface DesktopBridge {
   features: { clarify: boolean; jev: boolean; verify: boolean }
   getHealth: () => Promise<DesktopHealth>
+  sidecarRequest: (payload: { method: string; path: string; body?: unknown }) => Promise<{
+    ok: boolean
+    status: number
+    data?: unknown
+    events?: { event: string; data: unknown }[]
+    error?: string
+  }>
 }
 
 declare global {
+  interface ImportMetaEnv {
+    readonly VITE_FEATURE_CLARIFY?: string
+    readonly VITE_SIDECAR_URL?: string
+    readonly VITE_SIDECAR_TOKEN?: string
+  }
+
   interface Window {
     desktop?: DesktopBridge
   }

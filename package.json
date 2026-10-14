@@ -2,7 +2,7 @@
   "name": "zhihu-connect-engine",
   "version": "0.1.0",
   "private": true,
-  "description": "Local desktop Q&A agent — M0 scaffold",
+  "description": "Local desktop Q&A agent — M1 clarifier",
   "workspaces": [
     "apps/desktop"
   ],

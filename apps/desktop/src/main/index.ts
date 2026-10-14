@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import log from 'electron-log/main'
-import { sidecarBaseUrl, sidecarToken, startSidecar, stopSidecar } from './sidecar'
+import { sidecarBaseUrl, sidecarFetch, sidecarToken, startSidecar, stopSidecar } from './sidecar'
 
 log.initialize()
 
@@ -27,6 +27,12 @@ function createWindow(): void {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 }
+
+ipcMain.handle(
+  'sidecar:request',
+  async (_event, payload: { method?: string; path?: string; body?: unknown }) =>
+    sidecarFetch(String(payload?.method || 'GET'), String(payload?.path || '/'), payload?.body),
+)
 
 ipcMain.handle('sidecar:health', async () => {
   if (!sidecarBaseUrl) {

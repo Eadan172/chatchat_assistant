@@ -11,6 +11,8 @@ export interface HealthPayload {
 const desktop = {
   features,
   getHealth: (): Promise<HealthPayload> => ipcRenderer.invoke('sidecar:health'),
+  sidecarRequest: (payload: { method: string; path: string; body?: unknown }) =>
+    ipcRenderer.invoke('sidecar:request', payload),
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)
