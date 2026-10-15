@@ -1,1 +1,1 @@
-"""Grill-me clarifier. Empty in M0."""
+"""Grill-me clarifier: design tree, one question at a time, confirmed brief."""

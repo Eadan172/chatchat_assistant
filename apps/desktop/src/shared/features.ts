@@ -1,7 +1,6 @@
 /**
- * v1.1 feature flags. Default off so the M0 shell matches the v1.0 UI.
- * Later milestones may read overrides from settings; do not flip these here
- * until that milestone lands.
+ * v1.1 feature flags. Defaults stay off so the shell matches the v1.0 UI.
+ * The clarifier is implemented; set VITE_FEATURE_CLARIFY=true to mount it.
  */
 export const features: {
   clarify: boolean
@@ -11,4 +10,10 @@ export const features: {
   clarify: false,
   jev: false,
   verify: false,
+}
+
+export function flagEnabled(name: keyof typeof features, override?: string | boolean): boolean {
+  if (override === true || override === '1' || override === 'true') return true
+  if (override === false || override === '0' || override === 'false') return false
+  return features[name]
 }

@@ -1,8 +1,8 @@
-# 知识引擎（M0 scaffold）
+# 知识引擎（M1 clarifier）
 
-Local desktop Q&A agent. This revision is the **M0 skeleton** only: an Electron + React shell, a FastAPI sidecar with stub routes, and an Alembic migration that can build an empty database or upgrade a v1.0-shaped one.
+Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification: a design tree, one question at a time, and a `ClarifiedBrief` that `/chat` can store.
 
-Clarifier, Jev routing, freshness checks, connectors, and web search are packages and routes only. They do not run.
+Jev routing, freshness checks, connectors, and web search are still packages and 501 routes.
 
 ## Layout
 
@@ -54,15 +54,30 @@ curl -N -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json"
   http://127.0.0.1:8765/chat
 ```
 
-You should see `event: delta` then `event: done`.
+You should see `event: delta` then `event: done`. An empty body still returns that stub. Pass `brief_id` after confirming a clarification, or `"clarify": "skip"`, and the `done` event includes the brief. Generation stays a stub.
 
-v1.1 routes are registered and return **501**:
+Clarify one question at a time:
+
+```bash
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
+  -d '{"keyword":"考研数学复盘怎么做","domain_hint":"learning"}' \
+  http://127.0.0.1:8765/clarify/start
+```
+
+Answer with `action` `accept`, `edit` (`value` required), or `park`. When the response `state` is `ready_to_confirm`, confirm it:
+
+```bash
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
+  -d '{}' \
+  http://127.0.0.1:8765/clarify/12/confirm
+```
+
+`POST /clarify/start` with `"skip": true`, or `POST /chat` with `"clarify": "skip"`, writes `brief` = `skipped` and hands that brief to retrieval. `GET /clarify/active` restores an unfinished session after a restart. `CLARIFY_MAX_QUESTIONS` defaults to 7 (1–7). Question text can be polished when `CLARIFY_LLM_API_KEY` or `LLM_API_KEY` is set; otherwise the template is used.
+
+These routes still return **501**:
 
 | Method | Path |
 |---|---|
-| POST | `/clarify/start` |
-| POST | `/clarify/{session_id}/answer` |
-| POST | `/clarify/{session_id}/confirm` |
 | POST | `/verify` |
 | GET | `/verify/{job_id}` |
 | GET, POST | `/connectors` |
@@ -104,8 +119,8 @@ The main process picks a free localhost port, starts `uvicorn app.main:app`, and
 3. `<repo>/services/sidecar/.venv/bin/python`
 4. `python3` on `PATH`
 
-Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`, and the placeholder panels under `src/renderer/src/components/{clarify,sources,verify}` stay unmounted.
+Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`, so the window matches the M0 shell. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier: one question, a recommendation chip, progress, and a recap card. `features.jev` and `features.verify` still leave their panels unmounted.
 
 ## Not in this revision
 
-M1–M6 behavior is not implemented: no design-tree questions, no Jev decisions, no RAG, no crawlers, no verification jobs, no connector sync, and no web search. MediaCrawler is not downloaded.
+M2–M6 are not implemented: no Jev decisions, no RAG, no crawlers, no verification jobs, no connector sync, and no web search. MediaCrawler is not downloaded. `/chat` accepts and stores a brief, then still returns the generation stub.

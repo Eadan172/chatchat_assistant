@@ -94,6 +94,8 @@ def test_stub_routes_are_registered() -> None:
         "/stats",
         "/index/rebuild",
         "/clarify/start",
+        "/clarify/active",
+        "/clarify/{session_id}",
         "/clarify/{session_id}/answer",
         "/clarify/{session_id}/confirm",
         "/verify",
@@ -122,17 +124,18 @@ def test_health_requires_token_and_chat_sse(client: TestClient, token: str) -> N
     assert "event: delta" in chat.text
     assert "event: done" in chat.text
 
-    for path in ("/clarify/start", "/verify", "/connectors"):
+    for path in ("/verify", "/connectors"):
         response = client.post(path, headers={"x-sidecar-token": token})
         assert response.status_code == 501
+    missing_keyword = client.post("/clarify/start", headers={"x-sidecar-token": token})
+    assert missing_keyword.status_code == 422
 
 
-def test_v11_routes_reject_without_implementing(client: TestClient, token: str) -> None:
+def test_unimplemented_v11_routes_still_return_501(client: TestClient, token: str) -> None:
     headers = {"x-sidecar-token": token}
-    assert client.post("/clarify/7/answer", headers=headers).status_code == 501
-    assert client.post("/clarify/7/confirm", headers=headers).status_code == 501
     assert client.get("/verify/3", headers=headers).status_code == 501
     assert client.get("/connectors", headers=headers).status_code == 501
+    assert client.post("/connectors", headers=headers).status_code == 501
 
 
 def test_empty_database_upgrade_roundtrip(tmp_path) -> None:

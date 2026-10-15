@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlmodel import Session
 
 SIDECAR_ROOT = Path(__file__).resolve().parents[2]
+_engine: Engine | None = None
 
 
 def database_url(data_dir: str | None = None) -> str:
@@ -28,7 +32,9 @@ def make_engine(url: str) -> Engine:
 
 def init_db(data_dir: str | None = None) -> str:
     """Apply Alembic migrations and enable WAL. Returns the database URL."""
+    global _engine
     url = database_url(data_dir)
+    close_db()
     from alembic import command
     from alembic.config import Config
 
@@ -36,5 +42,30 @@ def init_db(data_dir: str | None = None) -> str:
     cfg.set_main_option("script_location", str(SIDECAR_ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", url)
     command.upgrade(cfg, "head")
-    make_engine(url).dispose()
+    _engine = make_engine(url)
     return url
+
+
+def get_engine() -> Engine:
+    if _engine is None:
+        init_db(os.getenv("DATA_DIR"))
+    assert _engine is not None
+    return _engine
+
+
+def close_db() -> None:
+    global _engine
+    if _engine is not None:
+        _engine.dispose()
+        _engine = None
+
+
+@contextmanager
+def open_session() -> Iterator[Session]:
+    with Session(get_engine()) as session:
+        yield session
+
+
+def get_db() -> Iterator[Session]:
+    with open_session() as session:
+        yield session

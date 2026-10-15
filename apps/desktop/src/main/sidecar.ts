@@ -107,3 +107,75 @@ export function stopSidecar(): void {
   if (child && !child.killed) child.kill()
   child = null
 }
+
+export interface SidecarResult {
+  ok: boolean
+  status: number
+  data?: unknown
+  events?: { event: string; data: unknown }[]
+  error?: string
+}
+
+function allowedPath(method: string, requestPath: string): boolean {
+  if (method !== 'GET' && method !== 'POST') return false
+  if (requestPath === '/chat' || requestPath === '/clarify/start' || requestPath === '/clarify/active') {
+    return true
+  }
+  return /^\/clarify\/\d+(\/(answer|confirm))?$/.test(requestPath)
+}
+
+function parseSse(text: string): { event: string; data: unknown }[] {
+  const events: { event: string; data: unknown }[] = []
+  for (const block of text.split('\n\n')) {
+    let event = 'message'
+    const dataLines: string[] = []
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim()
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+    }
+    if (!dataLines.length) continue
+    const raw = dataLines.join('\n')
+    let data: unknown = raw
+    try {
+      data = JSON.parse(raw)
+    } catch {
+      data = raw
+    }
+    events.push({ event, data })
+  }
+  return events
+}
+
+export async function sidecarFetch(method: string, requestPath: string, body?: unknown): Promise<SidecarResult> {
+  if (!sidecarBaseUrl) return { ok: false, status: 0, error: 'sidecar not started' }
+  const pathOnly = requestPath.startsWith('/') ? requestPath : `/${requestPath}`
+  if (!allowedPath(method.toUpperCase(), pathOnly)) {
+    return { ok: false, status: 0, error: 'path not allowed' }
+  }
+  try {
+    const response = await fetch(`${sidecarBaseUrl}${pathOnly}`, {
+      method: method.toUpperCase(),
+      headers: {
+        'x-sidecar-token': sidecarToken,
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+    const text = await response.text()
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('text/event-stream')) {
+      return { ok: response.ok, status: response.status, events: parseSse(text) }
+    }
+    let data: unknown = null
+    if (text) {
+      try {
+        data = JSON.parse(text)
+      } catch {
+        data = { detail: text }
+      }
+    }
+    return { ok: response.ok, status: response.status, data }
+  } catch (error) {
+    return { ok: false, status: 0, error: error instanceof Error ? error.message : 'request failed' }
+  }
+}
