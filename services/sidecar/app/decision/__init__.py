@@ -2,5 +2,6 @@
 
 M2 records Choice / Score / Noul probes in shadow mode. The real endpoint is
 not selected; callers depend on DecisionClient, and the process uses the
-local rule-based placeholder.
+local rule-based placeholder. Register another backend with
+``register_decision_backend`` when a model endpoint exists.
 """

@@ -17,6 +17,11 @@ interface DesktopBridge {
     events?: { event: string; data: unknown }[]
     error?: string
   }>
+  streamChat?: (
+    body: unknown,
+    onEvent: (event: { event: string; data: unknown }) => void,
+  ) => Promise<{ ok: boolean; status: number; error?: string }>
+  openPath?: (target: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 declare global {

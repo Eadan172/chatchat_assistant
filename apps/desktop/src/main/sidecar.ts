@@ -139,6 +139,58 @@ function parseSse(text: string): { event: string; data: unknown }[] {
   return events
 }
 
+export async function streamSidecar(
+  requestPath: string,
+  body: unknown,
+  onEvent: (event: { event: string; data: unknown }) => void,
+): Promise<SidecarResult> {
+  if (!sidecarBaseUrl) return { ok: false, status: 0, error: 'sidecar not started' }
+  const pathOnly = requestPath.startsWith('/') ? requestPath : `/${requestPath}`
+  if (!allowedSidecarPath('POST', pathOnly)) return { ok: false, status: 0, error: 'path not allowed' }
+  try {
+    const response = await fetch(`${sidecarBaseUrl}${pathOnly}`, {
+      method: 'POST',
+      headers: {
+        'x-sidecar-token': sidecarToken,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body ?? {}),
+    })
+    if (!response.body) {
+      const text = await response.text()
+      for (const event of parseSse(text)) onEvent(event)
+      return { ok: response.ok, status: response.status, events: parseSse(text) }
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const events: { event: string; data: unknown }[] = []
+    while (true) {
+      const step = await reader.read()
+      if (step.done) break
+      buffer += decoder.decode(step.value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''
+      for (const part of parts) {
+        const parsed = parseSse(`${part}\n\n`)
+        for (const event of parsed) {
+          events.push(event)
+          onEvent(event)
+        }
+      }
+    }
+    if (buffer.trim()) {
+      for (const event of parseSse(buffer)) {
+        events.push(event)
+        onEvent(event)
+      }
+    }
+    return { ok: response.ok, status: response.status, events }
+  } catch (error) {
+    return { ok: false, status: 0, error: error instanceof Error ? error.message : 'request failed' }
+  }
+}
+
 export async function sidecarFetch(method: string, requestPath: string, body?: unknown): Promise<SidecarResult> {
   if (!sidecarBaseUrl) return { ok: false, status: 0, error: 'sidecar not started' }
   const pathOnly = requestPath.startsWith('/') ? requestPath : `/${requestPath}`

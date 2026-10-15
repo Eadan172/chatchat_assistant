@@ -179,8 +179,25 @@ class RuleBasedDecisionClient:
         return label, confidence
 
 
+_BACKENDS: dict[str, Any] = {}
+
+
+def register_decision_backend(kind: str, factory) -> None:
+    """Plug in a future model endpoint. The built-in rule backend stays in place.
+
+    ``build_decision_client("remote")`` keeps raising until something registers
+    that name. Chat still treats the result as shadow advice.
+    """
+    if kind == "rule":
+        raise ValueError("the rule backend is built in")
+    _BACKENDS[kind] = factory
+
+
 def build_decision_client(kind: str = "rule") -> DecisionClient:
-    """Return the active backend. Only `rule` exists until an endpoint is chosen."""
-    if kind != "rule":
+    """Return the active backend. Only `rule` exists until an endpoint is registered."""
+    if kind == "rule":
+        return RuleBasedDecisionClient()
+    factory = _BACKENDS.get(kind)
+    if factory is None:
         raise DecisionUnavailable(f"decision backend {kind!r} is not available")
-    return RuleBasedDecisionClient()
+    return factory()

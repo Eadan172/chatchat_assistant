@@ -278,5 +278,5 @@ def test_upgrade_existing_v1_database(tmp_path) -> None:
     assert row.external_id is None
     assert {"clarify_session_id", "source_policy"} <= conversation_cols
     assert "decision_trace_id" in message_cols
-    assert version == "0001_m0"
-    assert {"clarify_session", "connector_account", "decision_log", "verify_job"} <= tables
+    assert version == "0002_m3"
+    assert {"clarify_session", "connector_account", "decision_log", "verify_job", "fts_chunks", "chunk_vector"} <= tables

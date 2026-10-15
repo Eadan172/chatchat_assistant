@@ -10,6 +10,16 @@ describe('sidecar path allowlist', () => {
     expect(allowedSidecarPath('POST', '/decision/logs')).toBe(false)
   })
 
+  it('allows library import, list, delete, and reindex', () => {
+    expect(allowedSidecarPath('GET', '/library/items')).toBe(true)
+    expect(allowedSidecarPath('POST', '/library/import')).toBe(true)
+    expect(allowedSidecarPath('DELETE', '/library/items/4')).toBe(true)
+    expect(allowedSidecarPath('POST', '/index/rebuild')).toBe(true)
+    expect(allowedSidecarPath('POST', '/search')).toBe(true)
+    expect(allowedSidecarPath('DELETE', '/library/items/nope')).toBe(false)
+    expect(allowedSidecarPath('GET', '/library/import')).toBe(false)
+  })
+
   it('still allows chat and clarify, and blocks other routes', () => {
     expect(allowedSidecarPath('POST', '/chat')).toBe(true)
     expect(allowedSidecarPath('GET', '/clarify/active')).toBe(true)

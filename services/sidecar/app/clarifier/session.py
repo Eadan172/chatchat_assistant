@@ -197,6 +197,12 @@ def attach_chat_turn(
     sources: list[str] | None,
     verify: str,
     clarify: str,
+    citations: list[Any] | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    latency_ms: int = 0,
 ) -> int:
     conversation = None
     if conversation_id is not None:
@@ -226,21 +232,79 @@ def attach_chat_turn(
             content=user_text or session_row.keyword,
         )
     )
+    stored_citations: list[Any] = [
+        {
+            "brief_id": session_row.id,
+            "brief_status": brief.get("status"),
+            "source_kind": "clarify",
+        }
+    ]
+    if citations:
+        stored_citations.extend(citations)
     db.add(
         Message(
             conversation_id=int(conversation.id or 0),
             role="assistant",
             content=assistant_text,
-            citations=[
-                {
-                    "brief_id": session_row.id,
-                    "brief_status": brief.get("status"),
-                    "source_kind": "clarify",
-                }
-            ],
+            citations=stored_citations,
+            provider=provider,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms,
         )
     )
     session_row.updated_at = utcnow()
+    db.commit()
+    db.refresh(conversation)
+    return int(conversation.id or 0)
+
+
+def record_plain_turn(
+    db: Session,
+    *,
+    conversation_id: int | None,
+    user_text: str,
+    assistant_text: str,
+    mode: str,
+    sources: list[str] | None,
+    verify: str,
+    clarify: str,
+    citations: list[Any],
+    provider: str | None,
+    model: str | None,
+    prompt_tokens: int,
+    completion_tokens: int,
+    latency_ms: int,
+) -> int:
+    """Store a library Q&A turn that has no clarification session."""
+    conversation = db.get(Conversation, conversation_id) if conversation_id is not None else None
+    if conversation is None:
+        title = (user_text or "对话").strip()[:80] or "对话"
+        conversation = Conversation(title=title, mode=mode or "personal")
+        db.add(conversation)
+        db.flush()
+    conversation.mode = mode or conversation.mode
+    conversation.source_policy = {
+        "sources": list(sources or ["local"]),
+        "verify": verify,
+        "clarify": clarify,
+    }
+    flag_modified(conversation, "source_policy")
+    db.add(Message(conversation_id=int(conversation.id or 0), role="user", content=user_text))
+    db.add(
+        Message(
+            conversation_id=int(conversation.id or 0),
+            role="assistant",
+            content=assistant_text,
+            citations=citations,
+            provider=provider,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms,
+        )
+    )
     db.commit()
     db.refresh(conversation)
     return int(conversation.id or 0)

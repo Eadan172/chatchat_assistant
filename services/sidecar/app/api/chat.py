@@ -1,26 +1,26 @@
-"""POST /chat — SSE stub that accepts a confirmed or skipped ClarifiedBrief.
+"""POST /chat — local RAG over SSE, with the M0 stub kept for an empty library.
 
-Generation and retrieval stay placeholders. A brief_id is stored on the
-conversation and handed to the retrieval hook. clarify=skip writes brief=skipped
-and takes the same path.
-
-M2 emits `decision` events and writes shadow logs. With real routing off, the
-delta and done payloads stay on this path.
+A confirmed or skipped brief is still stored. M2 shadow decisions are logged
+and do not change retrieval channels. When the library has indexed chunks the
+reply is grounded in those chunks; an empty hit list says the library has no
+match and does not call a model for invented facts.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Literal
+import time
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
-from app.clarifier.session import ClarifyError, attach_chat_turn, resolve_chat_brief
+from app.clarifier.session import ClarifyError, attach_chat_turn, record_plain_turn, resolve_chat_brief
 from app.db.session import open_session
 from app.orchestrator.chat_pipeline import prepare_chat_context, probe_decisions
+from app.retrieval.answer import compose_answer
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -81,7 +81,24 @@ async def _parse_body(request: Request) -> ChatBody:
         raise HTTPException(status_code=422, detail="invalid chat body") from exc
 
 
-def _prepare(body: ChatBody) -> dict | None:
+def _public_hit(hit: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "n": hit.get("n"),
+        "chunk_id": hit.get("chunk_id"),
+        "item_id": hit.get("item_id"),
+        "ordinal": hit.get("ordinal"),
+        "title": hit.get("title"),
+        "filename": hit.get("filename"),
+        "url": hit.get("url"),
+        "platform": hit.get("platform"),
+        "source_kind": hit.get("source_kind"),
+        "freshness_state": hit.get("freshness_state"),
+        "score": hit.get("score"),
+        "text": hit.get("text"),
+    }
+
+
+def _prepare(body: ChatBody, registry) -> dict | None:
     text = _user_text(body)
     with open_session() as db:
         try:
@@ -93,50 +110,139 @@ def _prepare(body: ChatBody) -> dict | None:
                 keyword=text,
                 domain_hint=body.domain_hint,
             )
-            if row is None:
-                return None
-            brief = dict(row.brief_json or {})
+            brief = dict(row.brief_json or {}) if row is not None else None
+            started = time.perf_counter()
             context = prepare_chat_context(
                 brief=brief,
                 mode=body.mode,
                 sources=body.sources,
                 verify=body.verify,
-            )
-            status = brief.get("status") or brief.get("brief")
-            assistant = _assistant_text(str(status) if status else None)
-            brief_id = row.id
-            conversation_id = attach_chat_turn(
-                db,
-                session_row=row,
-                conversation_id=body.conversation_id,
-                user_text=text,
-                assistant_text=assistant,
-                mode=body.mode,
-                sources=body.sources,
-                verify=body.verify,
-                clarify=body.clarify,
+                query=text,
+                top_k=body.top_k or 8,
+                registry=registry,
             )
             retrieval = context["retrieval"]
-            return {
-                "assistant_text": assistant,
-                "brief_id": brief_id,
-                "conversation_id": conversation_id,
-                "brief": brief,
-                "retrieval": {
-                    "accepted_brief": True,
-                    "brief_status": retrieval.get("brief_status"),
-                    "mode": retrieval.get("mode"),
-                    "sources": retrieval.get("sources"),
-                    "hits": retrieval.get("hits") or [],
-                },
-            }
+            if not context.get("searched"):
+                if row is None:
+                    return None
+                status = brief.get("status") if brief else None
+                assistant = _assistant_text(str(status) if status else None)
+                conversation_id = attach_chat_turn(
+                    db,
+                    session_row=row,
+                    conversation_id=body.conversation_id,
+                    user_text=text,
+                    assistant_text=assistant,
+                    mode=body.mode,
+                    sources=body.sources,
+                    verify=body.verify,
+                    clarify=body.clarify,
+                )
+                return _outcome(
+                    assistant=assistant,
+                    citations=[],
+                    provider=None,
+                    model=None,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    latency_ms=0,
+                    brief_id=row.id,
+                    conversation_id=conversation_id,
+                    brief=brief,
+                    retrieval=_public_retrieval(retrieval, accepted=True),
+                    gap=None,
+                )
+            hits = [_public_hit(hit) for hit in retrieval.get("hits") or []]
+            answer = compose_answer(
+                text,
+                hits,
+                brief,
+                registry=registry,
+                provider_id=body.provider,
+                model=body.model,
+            )
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            public = _public_retrieval(retrieval, accepted=row is not None, hits=hits)
+            if row is not None:
+                conversation_id = attach_chat_turn(
+                    db,
+                    session_row=row,
+                    conversation_id=body.conversation_id,
+                    user_text=text,
+                    assistant_text=answer.text,
+                    mode=body.mode,
+                    sources=body.sources,
+                    verify=body.verify,
+                    clarify=body.clarify,
+                    citations=hits,
+                    provider=answer.provider,
+                    model=answer.model,
+                    prompt_tokens=answer.prompt_tokens,
+                    completion_tokens=answer.completion_tokens,
+                    latency_ms=latency_ms,
+                )
+                brief_id = row.id
+            else:
+                conversation_id = record_plain_turn(
+                    db,
+                    conversation_id=body.conversation_id,
+                    user_text=text,
+                    assistant_text=answer.text,
+                    mode=body.mode,
+                    sources=body.sources,
+                    verify=body.verify,
+                    clarify=body.clarify,
+                    citations=hits,
+                    provider=answer.provider,
+                    model=answer.model,
+                    prompt_tokens=answer.prompt_tokens,
+                    completion_tokens=answer.completion_tokens,
+                    latency_ms=latency_ms,
+                )
+                brief_id = None
+            return _outcome(
+                assistant=answer.text,
+                citations=hits,
+                provider=answer.provider,
+                model=answer.model,
+                prompt_tokens=answer.prompt_tokens,
+                completion_tokens=answer.completion_tokens,
+                latency_ms=latency_ms,
+                brief_id=brief_id,
+                conversation_id=conversation_id,
+                brief=brief,
+                retrieval=public,
+                gap=answer.gap,
+            )
         except ClarifyError as exc:
             db.rollback()
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
+def _public_retrieval(retrieval: dict, *, accepted: bool, hits: list | None = None) -> dict:
+    return {
+        "accepted_brief": accepted,
+        "brief_status": retrieval.get("brief_status"),
+        "mode": retrieval.get("mode"),
+        "sources": retrieval.get("sources"),
+        "hits": hits if hits is not None else retrieval.get("hits") or [],
+        "scope_applied": bool(retrieval.get("scope_applied")),
+    }
+
+
+def _outcome(**kwargs) -> dict:
+    return kwargs
+
+
 def _sse(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _deltas(text: str) -> list[str]:
+    if not text:
+        return [""]
+    size = 48
+    return [text[index : index + size] for index in range(0, len(text), size)]
 
 
 def _safe_decisions(request: Request, body: ChatBody, outcome: dict | None) -> list[dict]:
@@ -175,9 +281,10 @@ def _safe_decisions(request: Request, body: ChatBody, outcome: dict | None) -> l
 @router.post("")
 async def chat(request: Request) -> StreamingResponse:
     body = await _parse_body(request)
+    registry = getattr(request.app.state, "registry", None)
     failed: HTTPException | None = None
     try:
-        outcome = _prepare(body)
+        outcome = _prepare(body, registry)
     except HTTPException as exc:
         outcome = None
         failed = exc
@@ -201,21 +308,30 @@ async def chat(request: Request) -> StreamingResponse:
                 },
             )
             return
-        yield _sse("delta", {"text": outcome["assistant_text"]})
-        yield _sse(
-            "done",
-            {
-                "provider": None,
-                "model": None,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "latency_ms": 0,
-                "brief_id": outcome["brief_id"],
-                "conversation_id": outcome["conversation_id"],
-                "brief": outcome["brief"],
-                "retrieval": outcome["retrieval"],
-            },
-        )
+        for hit in outcome["citations"]:
+            yield _sse("citation", hit)
+        # One delta keeps the pre-library stub and brief acknowledgements intact.
+        # Grounded replies are split so the SSE stream is more than a single blob.
+        pieces = [outcome["assistant"]] if not outcome["citations"] and outcome["gap"] is None else _deltas(outcome["assistant"])
+        if outcome["gap"] == "not_found":
+            pieces = [outcome["assistant"]]
+        for piece in pieces:
+            yield _sse("delta", {"text": piece})
+        done = {
+            "provider": outcome["provider"],
+            "model": outcome["model"],
+            "prompt_tokens": outcome["prompt_tokens"],
+            "completion_tokens": outcome["completion_tokens"],
+            "latency_ms": outcome["latency_ms"],
+            "conversation_id": outcome["conversation_id"],
+            "retrieval": outcome["retrieval"],
+        }
+        if outcome["brief_id"] is not None:
+            done["brief_id"] = outcome["brief_id"]
+            done["brief"] = outcome["brief"]
+        if outcome["gap"]:
+            done["gap"] = outcome["gap"]
+        yield _sse("done", done)
 
     return StreamingResponse(
         events(),

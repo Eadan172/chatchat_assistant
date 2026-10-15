@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { features, flagEnabled } from '../../shared/features'
+import { ChatPanel } from './components/chat/ChatPanel'
 import { ClarifyPanel } from './components/clarify/ClarifyPanel'
 import { DecisionSettings } from './components/decision/DecisionSettings'
+import { LibraryPanel } from './components/library/LibraryPanel'
 import { VerifyPlaceholder } from './components/verify/VerifyPlaceholder'
 
 interface HealthState {
@@ -28,20 +30,22 @@ export function App() {
       data-jev={String(jevOn)}
       data-verify={String(features.verify)}
     >
-      <div className="mx-auto max-w-3xl px-8 py-12">
-        <p className="text-sm text-sage">本地知识库</p>
-        <h1 className="mt-2 text-3xl font-semibold">知识引擎</h1>
-        <p className="mt-3 max-w-xl text-slate-600">
-          桌面壳已接通。问答、采集和索引仍是占位，后续里程碑再接上。
-        </p>
-        <section className="mt-8 rounded-2xl bg-white/80 p-5 shadow-sm ring-1 ring-pool">
-          <h2 className="text-sm font-medium text-sage">Sidecar</h2>
-          <p className="mt-2 text-sm">
-            {health == null && '等待主进程回报健康状态'}
-            {health?.ok && `已连接 · ${health.version ?? ''}`}
-            {health && !health.ok && (health.error ?? '未连接')}
+      <div className="mx-auto max-w-6xl px-6 py-8">
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="text-sm text-sage">本地知识库</p>
+            <h1 className="mt-1 text-3xl font-semibold">知识引擎</h1>
+          </div>
+          <p className="text-sm text-slate-600">
+            {health == null && '等待 sidecar'}
+            {health?.ok && `sidecar 已连接 · ${health.version ?? ''}`}
+            {health && !health.ok && (health.error ?? 'sidecar 未连接')}
           </p>
-        </section>
+        </header>
+        <div className="mt-6 grid items-start gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <LibraryPanel />
+          <ChatPanel />
+        </div>
         {clarifyOn ? <ClarifyPanel /> : null}
         {jevOn ? <DecisionSettings /> : null}
         {features.verify ? <VerifyPlaceholder /> : null}
