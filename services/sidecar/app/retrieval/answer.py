@@ -93,12 +93,25 @@ def _best_sentence(query: str, text: str) -> str:
     pieces = [part.strip() for part in _SENTENCE.findall(text) if part.strip()]
     if not pieces:
         return text[:180].strip()
-    scored = [(len(wanted & set(tokens(piece))), index, piece) for index, piece in enumerate(pieces)]
+    scored = [(_sentence_score(query, piece, wanted), index, piece) for index, piece in enumerate(pieces)]
     best = max(score for score, _index, _piece in scored)
     if best <= 0:
         return pieces[0][:400]
     chosen = [piece for score, _index, piece in scored if score == best]
     return "".join(chosen[:2])[:400]
+
+
+def _sentence_score(query: str, piece: str, wanted: set[str]) -> int:
+    from app.index.tokens import tokens
+
+    overlap = len(wanted & set(tokens(piece)))
+    bonus = 0
+    if any(mark in query for mark in ("多久", "多长时间", "什么时候", "何时")):
+        if any(mark in piece for mark in ("小时", "分钟", "时间", "天")):
+            bonus += 3
+    if "多少" in query and any(mark in piece for mark in ("克", "斤", "勺", "毫升", "次")):
+        bonus += 2
+    return overlap + bonus
 
 
 def _messages(query: str, hits: list[dict], scope: str | None) -> list[dict[str, str]]:
