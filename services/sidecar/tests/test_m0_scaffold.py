@@ -104,6 +104,9 @@ def test_stub_routes_are_registered() -> None:
         "/connectors/{connector_id}/sync",
         "/connectors/{connector_id}/status",
         "/connectors/{connector_id}",
+        "/decision/logs",
+        "/decision/shadow",
+        "/settings/decision",
     ):
         assert path in paths
 

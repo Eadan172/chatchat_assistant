@@ -2,7 +2,7 @@
   "name": "zhihu-connect-engine",
   "version": "0.1.0",
   "private": true,
-  "description": "Local desktop Q&A agent — M1 clarifier",
+  "description": "Local desktop Q&A agent — M2 Jev shadow decisions",
   "workspaces": [
     "apps/desktop"
   ],

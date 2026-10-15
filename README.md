@@ -1,8 +1,8 @@
-# 知识引擎（M1 clarifier）
+# 知识引擎（M2 Jev shadow）
 
-Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification: a design tree, one question at a time, and a `ClarifiedBrief` that `/chat` can store.
+Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode: every `/chat` writes intent and channel logs with `applied=false` while real routing stays off, so the answer path matches M1.
 
-Jev routing, freshness checks, connectors, and web search are still packages and 501 routes.
+The real Jev endpoint is not selected. `DecisionClient.choice` / `score` / `noul` are the swap point, and the process uses a local rule-based placeholder. Freshness checks, connectors, and web search are still packages and 501 routes.
 
 ## Layout
 
@@ -54,7 +54,30 @@ curl -N -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json"
   http://127.0.0.1:8765/chat
 ```
 
-You should see `event: delta` then `event: done`. An empty body still returns that stub. Pass `brief_id` after confirming a clarification, or `"clarify": "skip"`, and the `done` event includes the brief. Generation stays a stub.
+You should see one or more `event: decision` lines, then `event: delta`, then `event: done`. An empty body still returns the same stub delta and done payload as M1. Pass `brief_id` after confirming a clarification, or `"clarify": "skip"`, and the `done` event includes the brief. Generation stays a stub. Real routing is off by default, so a decision that would have picked `web` does not change `retrieval.sources`.
+
+Shadow logs (developer). Each `/chat` writes `decision_log` rows for `intent`, `need_clarify`, `route_channels`, `needs_verify`, and `relevance`. Nothing in those rows should contain an API key or the sidecar token.
+
+```bash
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" \
+  "http://127.0.0.1:8765/decision/logs?limit=20&offset=0"
+```
+
+The response is `{ "items", "limit", "offset", "total" }`. `items` are newest first. Toggle shadow mode (default on) or turn real routing on (default off):
+
+```bash
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
+  -d '{"enabled":true}' \
+  http://127.0.0.1:8765/decision/shadow
+
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/settings/decision
+
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
+  -d '{"shadow":true,"real_routing":false}' \
+  http://127.0.0.1:8765/settings/decision
+```
+
+Settings live in `$DATA_DIR/config/decision.json`. With shadow on, or with real routing off, `applied` stays false and the chat text does not change. If the placeholder raises, the row is stored with `fallback` `llm` or `default` and `/chat` still returns delta and done. There is no built-in production confidence cutoff; set `confidence_floor` only when you want one. Marking a row `applied` does not switch retrieval, clarification, or verification in this milestone.
 
 Clarify one question at a time:
 
@@ -119,8 +142,8 @@ The main process picks a free localhost port, starts `uvicorn app.main:app`, and
 3. `<repo>/services/sidecar/.venv/bin/python`
 4. `python3` on `PATH`
 
-Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`, so the window matches the M0 shell. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier: one question, a recommendation chip, progress, and a recap card. `features.jev` and `features.verify` still leave their panels unmounted.
+Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`, so the window matches the M0 shell. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier: one question, a recommendation chip, progress, and a recap card. Set `VITE_FEATURE_JEV=true` to mount the decision-layer settings (shadow on, real routing off). `features.verify` still leaves its panel unmounted. The `features.jev` value in source stays `false`.
 
 ## Not in this revision
 
-M2–M6 are not implemented: no Jev decisions, no RAG, no crawlers, no verification jobs, no connector sync, and no web search. MediaCrawler is not downloaded. `/chat` accepts and stores a brief, then still returns the generation stub.
+M3–M6 are not implemented: no RAG, no crawlers, no verification jobs, no connector sync, and no web search. MediaCrawler is not downloaded. `/chat` accepts and stores a brief, records shadow decisions, then still returns the generation stub. A real Jev SDK is not called.

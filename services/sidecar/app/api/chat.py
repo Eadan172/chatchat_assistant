@@ -3,11 +3,15 @@
 Generation and retrieval stay placeholders. A brief_id is stored on the
 conversation and handed to the retrieval hook. clarify=skip writes brief=skipped
 and takes the same path.
+
+M2 emits `decision` events and writes shadow logs. With real routing off, the
+delta and done payloads stay on this path.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,9 +20,10 @@ from pydantic import BaseModel, ValidationError
 
 from app.clarifier.session import ClarifyError, attach_chat_turn, resolve_chat_brief
 from app.db.session import open_session
-from app.orchestrator.chat_pipeline import prepare_chat_context
+from app.orchestrator.chat_pipeline import prepare_chat_context, probe_decisions
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 STUB_TEXT = "（M0 stub）sidecar 已连通，问答主路径尚未实现。"
 
@@ -134,12 +139,55 @@ def _sse(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _safe_decisions(request: Request, body: ChatBody, outcome: dict | None) -> list[dict]:
+    conversation_id = body.conversation_id
+    brief = None
+    if outcome:
+        conversation_id = outcome.get("conversation_id") or conversation_id
+        if isinstance(outcome.get("brief"), dict):
+            brief = outcome["brief"]
+    try:
+        return probe_decisions(
+            message=_user_text(body),
+            mode=body.mode,
+            clarify=body.clarify,
+            verify=body.verify,
+            sources=body.sources,
+            conversation_id=conversation_id,
+            brief=brief,
+            client=getattr(request.app.state, "decision_client", None),
+            link_trace=outcome is not None,
+        )
+    except Exception:
+        logger.exception("decision probe failed")
+        return [
+            {
+                "question_id": "route_channels",
+                "qtype": "choice",
+                "result": ["local"],
+                "confidence": 0.0,
+                "applied": False,
+                "fallback": "default",
+            }
+        ]
+
+
 @router.post("")
 async def chat(request: Request) -> StreamingResponse:
     body = await _parse_body(request)
-    outcome = _prepare(body)
+    failed: HTTPException | None = None
+    try:
+        outcome = _prepare(body)
+    except HTTPException as exc:
+        outcome = None
+        failed = exc
+    decisions = _safe_decisions(request, body, outcome)
+    if failed is not None:
+        raise failed
 
     def events():
+        for item in decisions:
+            yield _sse("decision", item)
         if outcome is None:
             yield _sse("delta", {"text": STUB_TEXT})
             yield _sse(
