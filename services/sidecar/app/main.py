@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import chat, clarify, collect, connectors, indexing, library, search, settings, stats, verify
+from app.api import chat, clarify, collect, connectors, decision, indexing, library, search, settings, stats, verify
 from app.db.session import SIDECAR_ROOT, close_db, init_db
 from app.llm.registry import ProviderRegistry
 
@@ -61,6 +61,7 @@ app.include_router(indexing.router, tags=["index"])
 app.include_router(clarify.router, prefix="/clarify", tags=["clarify"])
 app.include_router(verify.router, prefix="/verify", tags=["verify"])
 app.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
+app.include_router(decision.router, prefix="/decision", tags=["decision"])
 
 
 @app.get("/health")

@@ -22,6 +22,7 @@ interface DesktopBridge {
 declare global {
   interface ImportMetaEnv {
     readonly VITE_FEATURE_CLARIFY?: string
+    readonly VITE_FEATURE_JEV?: string
     readonly VITE_SIDECAR_URL?: string
     readonly VITE_SIDECAR_TOKEN?: string
   }

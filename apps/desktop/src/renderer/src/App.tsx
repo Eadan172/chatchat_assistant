@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { features, flagEnabled } from '../../shared/features'
 import { ClarifyPanel } from './components/clarify/ClarifyPanel'
+import { DecisionSettings } from './components/decision/DecisionSettings'
 import { VerifyPlaceholder } from './components/verify/VerifyPlaceholder'
 
 interface HealthState {
@@ -10,6 +11,7 @@ interface HealthState {
 }
 
 const clarifyOn = flagEnabled('clarify', import.meta.env.VITE_FEATURE_CLARIFY)
+const jevOn = flagEnabled('jev', import.meta.env.VITE_FEATURE_JEV)
 
 export function App() {
   const [health, setHealth] = useState<HealthState | null>(null)
@@ -23,7 +25,7 @@ export function App() {
     <main
       className="min-h-screen bg-mist text-ink"
       data-clarify={String(clarifyOn)}
-      data-jev={String(features.jev)}
+      data-jev={String(jevOn)}
       data-verify={String(features.verify)}
     >
       <div className="mx-auto max-w-3xl px-8 py-12">
@@ -41,6 +43,7 @@ export function App() {
           </p>
         </section>
         {clarifyOn ? <ClarifyPanel /> : null}
+        {jevOn ? <DecisionSettings /> : null}
         {features.verify ? <VerifyPlaceholder /> : null}
       </div>
     </main>

@@ -1,6 +1,8 @@
 /**
  * v1.1 feature flags. Defaults stay off so the shell matches the v1.0 UI.
- * The clarifier is implemented; set VITE_FEATURE_CLARIFY=true to mount it.
+ * clarify: set VITE_FEATURE_CLARIFY=true to mount the clarifier.
+ * jev: set VITE_FEATURE_JEV=true to mount decision-layer settings.
+ * The values in this object stay false.
  */
 export const features: {
   clarify: boolean

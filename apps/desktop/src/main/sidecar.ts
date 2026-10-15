@@ -5,6 +5,7 @@ import { createServer, type AddressInfo } from 'node:net'
 import path from 'node:path'
 import { app } from 'electron'
 import log from 'electron-log/main'
+import { allowedSidecarPath } from '../shared/sidecarPaths'
 
 let child: ChildProcess | null = null
 export let sidecarBaseUrl = ''
@@ -116,14 +117,6 @@ export interface SidecarResult {
   error?: string
 }
 
-function allowedPath(method: string, requestPath: string): boolean {
-  if (method !== 'GET' && method !== 'POST') return false
-  if (requestPath === '/chat' || requestPath === '/clarify/start' || requestPath === '/clarify/active') {
-    return true
-  }
-  return /^\/clarify\/\d+(\/(answer|confirm))?$/.test(requestPath)
-}
-
 function parseSse(text: string): { event: string; data: unknown }[] {
   const events: { event: string; data: unknown }[] = []
   for (const block of text.split('\n\n')) {
@@ -149,7 +142,7 @@ function parseSse(text: string): { event: string; data: unknown }[] {
 export async function sidecarFetch(method: string, requestPath: string, body?: unknown): Promise<SidecarResult> {
   if (!sidecarBaseUrl) return { ok: false, status: 0, error: 'sidecar not started' }
   const pathOnly = requestPath.startsWith('/') ? requestPath : `/${requestPath}`
-  if (!allowedPath(method.toUpperCase(), pathOnly)) {
+  if (!allowedSidecarPath(method.toUpperCase(), pathOnly)) {
     return { ok: false, status: 0, error: 'path not allowed' }
   }
   try {
