@@ -1,8 +1,16 @@
-# 知识引擎（M2 Jev shadow）
+# 知识引擎（M3 本地库问答）
 
-Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode: every `/chat` writes intent and channel logs with `applied=false` while real routing stays off, so the answer path matches M1.
+Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode. M3 imports local files, indexes them, and answers from those chunks.
 
-The real Jev endpoint is not selected. `DecisionClient.choice` / `score` / `noul` are the swap point, and the process uses a local rule-based placeholder. Freshness checks, connectors, and web search are still packages and 501 routes.
+Import md, txt, pdf, or docx. Each file is chunked and written to SQLite FTS5 plus a vector index (sqlite-vec when the extension loads, otherwise a blob of the same vectors). `POST /chat` streams `citation`, `delta`, and `done` over SSE. Citations name the source file and chunk. If the library has documents but nothing matches, the answer is `当前知识库中没有找到相关内容。` and no citation is emitted. An empty library still returns the M0 stub, so older chat tests stay valid.
+
+Shadow decisions are unchanged: every `/chat` still logs intent and channel probes, `applied` stays false while real routing is off, and the decider does not switch retrieval channels. A confirmed brief's `scope` filters hits and is repeated in the answer. `personal` mode does not return `web` or `connector` rows.
+
+Chat and embeddings are OpenAI-compatible. Set `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` (or `EMBED_BASE_URL`, `EMBED_API_KEY`, `EMBED_MODEL`). With no key, indexing uses a deterministic hashing embedder and answers are extractive. That offline path is what the tests and the desktop demo use.
+
+The Jev client is still the rule backend. `register_decision_backend` is the seam for a later model endpoint; `build_decision_client("remote")` raises until one is registered. Web search is a chain of Google then `WEB_SEARCH_FALLBACK` (default `fallback`). Neither provider calls the network. Freshness checks and connectors are still 501 routes.
+
+Offline retrieval baseline, recorded here rather than treated as a production score: on the five-question fixture in `services/sidecar/tests/test_m3_library.py`, top-1 citation accuracy is 5/5 (1.0) with the hashing embedder.
 
 ## Layout
 
@@ -24,7 +32,7 @@ python -m pip install -U pip
 python -m pip install -r requirements-core.txt
 ```
 
-`requirements-core.txt` is enough to boot M0. `requirements.txt` also lists torch, FlagEmbedding, and transformers for later milestones. Those libraries are not imported when the process starts.
+`requirements-core.txt` is enough to boot the sidecar, including `pypdf` and `sqlite-vec`. `requirements.txt` also lists torch, FlagEmbedding, and transformers. Those libraries are not imported when the process starts. Set `EMBED_PROVIDER=bge` only when you intend to load them.
 
 ```bash
 export SIDECAR_TOKEN=devtoken
@@ -46,7 +54,33 @@ Expected:
 
 When `SIDECAR_TOKEN` is set, every route — including `/health` — requires the header `x-sidecar-token`. A missing or wrong token returns `401`.
 
-Trivial chat stream (no retrieval, no model call):
+Import a file and ask about it (offline extractive answer, no API key):
+
+```bash
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
+  -d '{"filename":"qingjiao-notes.md","text":"每斤青椒放盐三克。腌制时间是两小时。"}' \
+  http://127.0.0.1:8765/library/import
+
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/library/items
+
+curl -N -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
+  -d '{"mode":"personal","message":"青椒腌制要多久","sources":["local"]}' \
+  http://127.0.0.1:8765/chat
+```
+
+You should see `event: citation` (filename and chunk), then `event: delta`, then `event: done` with `"provider":"offline"`. A question the file does not cover returns the not-found sentence and no citation. `POST /search` returns the same hits without generating. `POST /index/rebuild` with `{"scope":"pending"}` or `{"scope":"all"}` reindexes. `DELETE /library/items/{id}` removes the row, chunks, FTS rows, and vectors.
+
+One-shot sample import without curl, from the repo root:
+
+```bash
+cd services/sidecar
+export DATA_DIR="$PWD/../../.data"
+.venv/bin/python scripts/import_sample.py
+```
+
+The sample is `samples/m3/qingjiao-notes.md`.
+
+Chat with no indexed chunks is still the M0 stub (decision events, one delta, one done). Trivial empty chat:
 
 ```bash
 curl -N -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
@@ -54,7 +88,7 @@ curl -N -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json"
   http://127.0.0.1:8765/chat
 ```
 
-You should see one or more `event: decision` lines, then `event: delta`, then `event: done`. An empty body still returns the same stub delta and done payload as M1. Pass `brief_id` after confirming a clarification, or `"clarify": "skip"`, and the `done` event includes the brief. Generation stays a stub. Real routing is off by default, so a decision that would have picked `web` does not change `retrieval.sources`.
+You should see one or more `event: decision` lines, then `event: delta`, then `event: done`. An empty body still returns the same stub delta and done payload as M1 when the library has no chunks. Pass `brief_id` after confirming a clarification, or `"clarify": "skip"`, and the `done` event includes the brief. Real routing is off by default, so a decision that would have picked `web` does not change `retrieval.sources`.
 
 Shadow logs (developer). Each `/chat` writes `decision_log` rows for `intent`, `need_clarify`, `route_channels`, `needs_verify`, and `relevance`. Nothing in those rows should contain an API key or the sidecar token.
 
@@ -117,7 +151,7 @@ alembic upgrade head
 python -c "from app.db.session import init_db; print(init_db())"
 ```
 
-On an empty file the migration creates the v1.0 tables plus v1.1 columns. On a database that already has v1.0 tables (`content_item`, `conversation`, `message`) it adds the new nullable columns and creates `clarify_session`, `connector_account`, `decision_log`, and `verify_job`. Existing rows get `fetched_at = collected_at` and `freshness_state = 'unknown'`.
+On an empty file the migration creates the v1.0 tables plus v1.1 columns, then M3 adds `fts_chunks` (FTS5 trigram) and `chunk_vector`. On a database that already has v1.0 tables (`content_item`, `conversation`, `message`) it adds the new nullable columns and creates `clarify_session`, `connector_account`, `decision_log`, and `verify_job`, then the M3 index tables. Existing rows get `fetched_at = collected_at` and `freshness_state = 'unknown'`. Head revision is `0002_m3`.
 
 Tests:
 
@@ -142,8 +176,8 @@ The main process picks a free localhost port, starts `uvicorn app.main:app`, and
 3. `<repo>/services/sidecar/.venv/bin/python`
 4. `python3` on `PATH`
 
-Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`, so the window matches the M0 shell. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier: one question, a recommendation chip, progress, and a recap card. Set `VITE_FEATURE_JEV=true` to mount the decision panel: shadow and real-routing toggles, one `/chat` probe, the `decision` events from that reply, and the shadow log. `features.verify` still leaves its panel unmounted. The `features.jev` value in source stays `false`.
+The window is the library (import, list, delete, index status) and a chat pane. Citations are buttons; choosing one shows the chunk text and can open the stored file. Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier. Set `VITE_FEATURE_JEV=true` to mount the decision panel. `features.verify` still leaves its panel unmounted.
 
 ## Not in this revision
 
-M3–M6 are not implemented: no RAG, no crawlers, no verification jobs, no connector sync, and no web search. MediaCrawler is not downloaded. `/chat` accepts and stores a brief, records shadow decisions, then still returns the generation stub. A real Jev SDK is not called.
+M4–M6 are not implemented: no freshness jobs, no connector sync, and no live web search. MediaCrawler is not downloaded. BGE-M3 and the reranker are not loaded unless `EMBED_PROVIDER=bge`. The Jev rule client is not a model endpoint. Google search and the fallback provider raise `SearchUnavailable` instead of calling out. `/verify` and `/connectors` still return 501.

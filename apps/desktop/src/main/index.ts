@@ -1,7 +1,7 @@
 import path from 'node:path'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import log from 'electron-log/main'
-import { sidecarBaseUrl, sidecarFetch, sidecarToken, startSidecar, stopSidecar } from './sidecar'
+import { sidecarBaseUrl, sidecarFetch, sidecarToken, startSidecar, stopSidecar, streamSidecar } from './sidecar'
 
 log.initialize()
 
@@ -9,9 +9,10 @@ let sidecarError: string | null = null
 
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 1100,
-    height: 760,
+    width: 1200,
+    height: 820,
     show: false,
+    backgroundColor: '#e7f2ec',
     title: '知识引擎',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -33,6 +34,27 @@ ipcMain.handle(
   async (_event, payload: { method?: string; path?: string; body?: unknown }) =>
     sidecarFetch(String(payload?.method || 'GET'), String(payload?.path || '/'), payload?.body),
 )
+
+ipcMain.handle(
+  'sidecar:stream',
+  async (event, payload: { path?: string; body?: unknown; channel?: string }) => {
+    const channel = String(payload?.channel || '')
+    if (!/^chat-\d+-\d+$/.test(channel)) return { ok: false, status: 0, error: 'bad channel' }
+    return streamSidecar(String(payload?.path || '/chat'), payload?.body, (item) => {
+      if (!event.sender.isDestroyed()) event.sender.send(channel, item)
+    })
+  },
+)
+
+ipcMain.handle('shell:openPath', async (_event, target: unknown) => {
+  const root = path.resolve(app.getPath('userData'), 'library')
+  const resolved = path.resolve(String(target || ''))
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    return { ok: false, error: 'path not allowed' }
+  }
+  const error = await shell.openPath(resolved)
+  return { ok: error === '', error: error || undefined }
+})
 
 ipcMain.handle('sidecar:health', async () => {
   if (!sidecarBaseUrl) {
