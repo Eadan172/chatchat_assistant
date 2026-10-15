@@ -142,7 +142,7 @@ The main process picks a free localhost port, starts `uvicorn app.main:app`, and
 3. `<repo>/services/sidecar/.venv/bin/python`
 4. `python3` on `PATH`
 
-Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`, so the window matches the M0 shell. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier: one question, a recommendation chip, progress, and a recap card. Set `VITE_FEATURE_JEV=true` to mount the decision-layer settings (shadow on, real routing off). `features.verify` still leaves its panel unmounted. The `features.jev` value in source stays `false`.
+Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`, so the window matches the M0 shell. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier: one question, a recommendation chip, progress, and a recap card. Set `VITE_FEATURE_JEV=true` to mount the decision panel: shadow and real-routing toggles, one `/chat` probe, the `decision` events from that reply, and the shadow log. `features.verify` still leaves its panel unmounted. The `features.jev` value in source stays `false`.
 
 ## Not in this revision
 
