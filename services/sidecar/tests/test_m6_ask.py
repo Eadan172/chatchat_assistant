@@ -1033,6 +1033,8 @@ def test_ambiguous_entity_asks_named_candidates(
     text = question["question"]["text"]
     assert "北京密云古北水镇" in text
     assert "上海长宁古北" in text
+    assert question["question"]["recommendation"] == ""
+    assert question["question"]["options"] == ["北京密云古北水镇", "上海长宁古北"]
     assert "怎样才算成功" not in text
     assert str(question["question"]["id"]).startswith("ambiguity-")
 
@@ -1048,8 +1050,9 @@ def test_ambiguous_entity_asks_named_candidates(
     assert step.status_code == 200, step.text
     follow = parse_sse(step.text)
     nxt = next(payload for name, payload in follow if name == "clarify_question")
-    assert "预算" in nxt["question"]["text"]
-    assert "口味" in nxt["question"]["text"]
+    assert "想吃哪一类" in nxt["question"]["text"]
+    assert "日料" in nxt["question"]["options"]
+    assert nxt["question"]["recommendation"] == ""
     assert "怎样才算成功" not in nxt["question"]["text"]
 
 
@@ -1075,8 +1078,9 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
         },
         complete=complete,
     )
-    assert "按原顺序原样写出" in captured["system"]
-    assert "不要自己重排" in captured["system"]
+    assert "据X榜单第N名" in captured["system"]
+    assert "来源未标名次" in captured["system"]
+    assert "不要把原文顺序当成名次" in captured["system"]
     assert "不要编造" in captured["system"]
     assert "仅仅话题相关" in captured["system"]
     assert NO_LIVE_SCORE in result.text
@@ -1093,8 +1097,10 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
         {"web": [{"title": "点评榜", "url": "https://example.com/list", "text": listing, "source": "web"}]},
         complete=reversed_list,
     )
-    assert "[1]" not in reversed_result.text
-    assert reversed_result.citations == []
+    assert "1. 丙餐厅 2. 乙餐厅 3. 甲餐厅" not in reversed_result.text
+    assert "据《点评榜》榜单第1名：甲餐厅" in reversed_result.text
+    assert reversed_result.text.index("第1名") < reversed_result.text.index("第3名")
+    assert [item["title"] for item in reversed_result.citations] == ["点评榜"]
 
     def with_scores(messages: list[dict[str, str]]) -> tuple[str, int, int]:
         captured["scored"] = messages[0]["content"]
@@ -1105,7 +1111,7 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
         {"web": [{"title": "点评榜", "url": "https://example.com/list", "text": scored, "source": "web"}]},
         complete=with_scores,
     )
-    assert "按原顺序" in captured["scored"]
+    assert "来源未标名次" in captured["scored"]
     assert NO_LIVE_SCORE not in scored_result.text
     assert [item["title"] for item in scored_result.citations] == ["点评榜"]
 
@@ -1118,5 +1124,276 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
         {"ima": [{"title": "原理笔记", "text": NOTE_TEXT, "ima_kind": "note", "source": "ima"}]},
         complete=plain,
     )
-    assert "按原顺序" not in captured["plain"]
+    assert "来源未标名次" not in captured["plain"]
     assert "仅仅话题相关" in captured["plain"]
+
+
+def test_clarified_local_life_routes_web_only(client: TestClient, token: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ask.pipeline import decide
+
+    seen: list[dict] = []
+
+    def fake_post(base, api_key, model, messages, *, temperature):
+        del base, model, temperature
+        assert api_key == DEEPSEEK_KEY
+        user = json.loads(messages[-1]["content"])
+        seen.append(user)
+        if user.get("brief_status") == "clarified":
+            payload = {
+                "need_clarify": "yes",
+                "sources": ["web", "ima", "local"],
+                "queries": ["古北 美食"],
+                "confidence": 0.7,
+                "ambiguities": [{"term": "古北", "options": ["北京密云古北水镇", "上海长宁古北"]}],
+            }
+        else:
+            payload = {
+                "need_clarify": "no",
+                "sources": ["web", "ima", "local"],
+                "queries": ["古北 附近 美食"],
+                "confidence": 0.8,
+                "ambiguities": [{"term": "古北", "options": ["北京密云古北水镇", "上海长宁古北"]}],
+            }
+        content = json.dumps(payload, ensure_ascii=False)
+        return {"choices": [{"message": {"content": content}}], "usage": {}, "_http_status": 200}
+
+    monkeypatch.setenv("FEATURE_ASK", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
+    monkeypatch.setattr("app.decision.deepseek._post_chat", fake_post)
+    opened = client.post(
+        "/ask",
+        headers=headers(token),
+        json={"message": "去古北玩，附近美食排名", "clarify": "auto"},
+    )
+    assert opened.status_code == 200, opened.text
+    choices = {
+        "ambiguity-0": "上海长宁古北",
+        "probe-cuisine": "日料",
+        "probe-basis": "大众点评评分",
+        "probe-price": "价格亲民",
+        "probe-metro": "离地铁站近",
+    }
+    events = parse_sse(opened.text)
+    for _ in range(6):
+        question = next((payload for name, payload in events if name == "clarify_question"), None)
+        if question is None:
+            break
+        qid = question["question"]["id"]
+        step = client.post(
+            "/ask",
+            headers=headers(token),
+            json={
+                "message": "去古北玩，附近美食排名",
+                "session_id": question["session_id"],
+                "answers": [{"question_id": qid, "action": "edit", "value": choices[qid]}],
+            },
+        )
+        assert step.status_code == 200, step.text
+        events = parse_sse(step.text)
+    searching = next(payload for name, payload in events if name == "searching")
+    assert searching["sources"] == ["web"]
+    assert "ima" not in searching["sources"]
+    assert "local" not in searching["sources"]
+    assert "上海长宁古北" in searching["queries"][0]
+    assert "日料" in searching["queries"][0]
+    assert "大众点评" in searching["queries"][0]
+    assert "离地铁站近" in searching["queries"][0]
+    assert seen[-1]["brief_status"] == "clarified"
+    assert "上海长宁古北" in seen[-1]["text"]
+    assert "日料" in seen[-1]["constraints"]
+    assert "大众点评评分" in seen[-1]["constraints"]
+
+    plain = decide("第一性原理的定义是什么", brief=None, kb_name="", clarify="skip")
+    assert plain.sources == ["local", "ima", "web"]
+
+
+def test_jev_web_only_does_not_add_local_or_ima(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from app.ask.pipeline import decide, life_web_only
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    food = decide("北京三里屯附近美食", brief=None, kb_name="", clarify="skip")
+    assert food.sources == ["web"]
+    assert life_web_only("去古北玩")
+    assert not life_web_only("第一性原理的笔记")
+
+    def fake_post(base, api_key, model, messages, *, temperature):
+        del base, api_key, model, messages, temperature
+        content = json.dumps(
+            {"need_clarify": "no", "sources": ["web"], "queries": ["第一性原理 定义"], "confidence": 0.9, "ambiguities": []},
+            ensure_ascii=False,
+        )
+        return {"choices": [{"message": {"content": content}}], "usage": {}, "_http_status": 200}
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
+    monkeypatch.setattr("app.decision.deepseek._post_chat", fake_post)
+    plan = decide("第一性原理的定义是什么", brief=None, kb_name="", clarify="skip")
+    assert plan.sources == ["web"]
+    assert plan.backend == "deepseek"
+
+
+def test_rank_markers_budget_and_uncited_sentences() -> None:
+    from app.ask.synthesize import NO_LIVE_SCORE, Evidence, citation_excerpt_limit, public_citation
+
+    calls = {"n": 0}
+
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "1. 甲餐厅 2. 乙餐厅 3. 丙餐厅。[1] 丁餐厅最好吃。[1]", 3, 4
+        assert "重写成连贯" in messages[0]["content"]
+        return "甲餐厅人均80。[1] 丙餐厅。[1]", 5, 6
+
+    listed = "甲餐厅人均80 · 乙餐厅人均150 · 丙餐厅"
+    result = synthesize(
+        "古北附近美食排名 人均100以内",
+        {"web": [{"title": "古北美食TOP", "url": "https://example.com/top", "text": listed, "source": "web"}]},
+        complete=complete,
+    )
+    included = next(line for line in result.text.splitlines() if "收录了" in line)
+    assert "来源未标名次" in included
+    assert "第1名" not in result.text
+    assert "甲餐厅" in included
+    assert "丙餐厅（价格未知）" in included
+    assert "乙餐厅" not in included
+    assert "超出预算未列入：乙餐厅（人均150）" in result.text
+    assert "丁餐厅" not in result.text
+    assert NO_LIVE_SCORE in result.text
+    assert "甲餐厅人均80" in result.text
+    assert calls["n"] == 2
+    assert result.prompt_tokens == 8
+    assert result.completion_tokens == 10
+
+    def ranked(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        return "随便排。", 1, 1
+
+    ranked_result = synthesize(
+        "附近美食排名",
+        {"web": [{"title": "古北排行榜", "url": "https://example.com/r", "text": "TOP1 甲餐厅 TOP2 乙餐厅", "source": "web"}]},
+        complete=ranked,
+    )
+    assert "据《古北排行榜》榜单第1名：甲餐厅" in ranked_result.text
+    assert "据《古北排行榜》榜单第2名：乙餐厅" in ranked_result.text
+    assert "来源未标名次" not in ranked_result.text
+    assert ranked_result.text.index("第1名") < ranked_result.text.index("第2名")
+
+    passage = "可核对的事实。" + ("甲" * 1200)
+    cited = public_citation(
+        Evidence(
+            n=1,
+            text=passage,
+            title="长摘录",
+            url="https://example.com/long",
+            filename="",
+            source="web",
+            source_kind="web_search",
+            platform="web",
+            freshness_state="unknown",
+            score=1,
+        )
+    )
+    assert citation_excerpt_limit() > 800
+    assert len(cited["text"]) == len(passage)
+    assert cited["text"].endswith("甲")
+
+
+def test_vague_food_query_clarifies_even_when_router_says_no(
+    client: TestClient, token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.clarifier.design_tree import vague_food_query
+
+    assert vague_food_query("去古北玩，附近美食排名")
+    assert not vague_food_query("上海古北的大众点评打分最高的价格亲民、距离地铁站最近的日料")
+
+    def fake_post(base, api_key, model, messages, *, temperature):
+        del base, api_key, model, messages, temperature
+        content = json.dumps(
+            {
+                "need_clarify": "no",
+                "sources": ["web", "ima", "local"],
+                "queries": ["古北 附近 美食"],
+                "confidence": 0.9,
+                "ambiguities": [],
+            },
+            ensure_ascii=False,
+        )
+        return {"choices": [{"message": {"content": content}}], "usage": {}, "_http_status": 200}
+
+    monkeypatch.setenv("FEATURE_ASK", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
+    monkeypatch.setattr("app.decision.deepseek._post_chat", fake_post)
+    opened = client.post(
+        "/ask",
+        headers=headers(token),
+        json={"message": "去古北玩，附近美食排名", "clarify": "auto"},
+    )
+    assert opened.status_code == 200, opened.text
+    events = parse_sse(opened.text)
+    question = next(payload for name, payload in events if name == "clarify_question")
+    assert question["question"]["id"] == "probe-place"
+    assert question["question"]["recommendation"] == ""
+    assert "北京密云" not in question["question"]["text"]
+    assert "上海长宁" not in question["question"]["text"]
+    refused = client.post(
+        "/ask",
+        headers=headers(token),
+        json={
+            "message": "去古北玩，附近美食排名",
+            "session_id": question["session_id"],
+            "answers": [{"question_id": "probe-place", "action": "accept"}],
+        },
+    )
+    assert any(name == "error" for name, _payload in parse_sse(refused.text))
+
+    specific = client.post(
+        "/ask",
+        headers=headers(token),
+        json={"message": "上海古北的大众点评打分最高的价格亲民、距离地铁站最近的日料", "clarify": "auto"},
+    )
+    specific_events = parse_sse(specific.text)
+    assert not any(name == "clarify_question" for name, _payload in specific_events)
+    searching = next(payload for name, payload in specific_events if name == "searching")
+    assert searching["sources"] == ["web"]
+
+
+def test_dianping_scores_and_metro_distance_stay_inside_sources() -> None:
+    from app.ask.synthesize import DIANPING_NOTICE, DISTANCE_GAP
+
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        system = messages[0]["content"]
+        assert "评分以大众点评 App 为准" in system
+        assert "不要调用地图" in system
+        return "甲餐厅大众点评 4.9 分，距娄山关路站步行3分钟。[1]", 1, 1
+
+    cited = synthesize(
+        "上海古北 大众点评打分 离地铁站近的日料",
+        {
+            "web": [
+                {
+                    "title": "古北游记",
+                    "url": "https://example.com/a",
+                    "text": "甲餐厅在古北，距娄山关路站步行8分钟。",
+                    "source": "web",
+                }
+            ]
+        },
+        complete=complete,
+    )
+    assert "4.9" not in cited.text
+    assert "步行3" not in cited.text
+    assert "距娄山关路站步行8分钟" in cited.text
+    assert "[1]" in cited.text
+    assert DIANPING_NOTICE in cited.text
+    assert DISTANCE_GAP not in cited.text
+
+    def bare(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        return "乙餐厅评分 4.8 分。[1]", 1, 1
+
+    missing = synthesize(
+        "大众点评打分最高而且离地铁近",
+        {"web": [{"title": "笔记", "url": "https://example.com/b", "text": "乙餐厅在商场里。", "source": "web"}]},
+        complete=bare,
+    )
+    assert "4.8" not in missing.text
+    assert DIANPING_NOTICE in missing.text
+    assert DISTANCE_GAP in missing.text

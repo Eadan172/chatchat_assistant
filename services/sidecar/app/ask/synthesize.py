@@ -272,7 +272,8 @@ def synthesize(
     tail = [*related, *extra]
 
     def finish(text: str, provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> Synthesis:
-        cleaned, used = align_citations(strip_empty_points(text), citations)
+        limited = ensure_external_limits(query, text, evidences)
+        cleaned, used = align_citations(strip_empty_points(limited), citations)
         return Synthesis(
             append_related(cleaned, tail),
             provider,
@@ -293,8 +294,24 @@ def synthesize(
         return finish(grouped_text(query, evidences, conflicts, reason=GROUPED_FAILED), "offline", "grouped", 0, 0)
     text = _finalize(raw, evidences, conflicts)
     text = drop_unsupported_citations(text, citations)
+    extra_prompt, extra_completion = 0, 0
+    if not conflicts:
+        text, extra_prompt, extra_completion = _regenerate_thin(
+            query,
+            text,
+            evidences,
+            citations,
+            complete,
+        )
+    text = _join(text, format_rank_block(query, evidences))
     text = ensure_score_notice(query, text, evidences)
-    return finish(text, "deepseek", "deepseek-chat", prompt_tokens, completion_tokens)
+    return finish(
+        text,
+        "deepseek",
+        "deepseek-chat",
+        prompt_tokens + extra_prompt,
+        completion_tokens + extra_completion,
+    )
 
 
 def grouped_text(query: str, items: list[Evidence], conflicts: list[tuple[Evidence, Evidence]], *, reason: str) -> str:
@@ -348,7 +365,7 @@ def public_citation(item: Evidence) -> dict[str, Any]:
         "title": item.title,
         "filename": item.filename,
         "url": item.url,
-        "text": item.text[:800],
+        "text": item.text[:citation_excerpt_limit()],
         "source_kind": item.source_kind,
         "platform": item.platform,
         "freshness_state": item.freshness_state,
@@ -363,7 +380,7 @@ def public_citation(item: Evidence) -> dict[str, Any]:
                 "title": origin.title,
                 "filename": origin.filename,
                 "url": origin.url,
-                "text": origin.text[:400],
+                "text": origin.text[:citation_excerpt_limit()],
                 "freshness_state": origin.freshness_state,
                 "external_id": origin.external_id,
             }
@@ -373,23 +390,51 @@ def public_citation(item: Evidence) -> dict[str, Any]:
 
 
 _RANK_QUERY = re.compile(r"排名|榜单|排行|(?<![A-Za-z])top(?![A-Za-z])", re.IGNORECASE)
-_RANK_ITEM = re.compile(
-    r"(?:(?<!\d)\d{1,2}\s*[.、．]|第[一二三四五六七八九十]+[名位]?)\s*([^\d。\n;；.]{2,40})"
+_LIST_TITLE = re.compile(r"TOP|排行榜|榜单|排名", re.IGNORECASE)
+_EXPLICIT_RANK = re.compile(
+    r"(?i)(?:top\s*([0-9]{1,2})|(?<!\d)([0-9]{1,2})\s*[.、．)、]|第\s*([0-9]{1,2}|[一二三四五六七八九十])\s*名)"
 )
 _SCORE = re.compile(r"评分|口碑|星级|\d+(?:\.\d+)?\s*分")
+_BUDGET = re.compile(r"(?:人均|预算)\s*(\d+)\s*(?:元)?\s*(?:以?内|以下)")
+_PRICE = re.compile(r"人均\s*(\d+)")
+_KEEP_LINE = ("两处来源说法不同", "时效：", "超出预算", "来源未标名次", "价格未知", "没有实时评分", "没有评分", "没有口碑", "相关条目")
+_CN_RANK = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 NO_LIVE_SCORE = "摘录里没有实时评分或口碑分数。"
+DIANPING_NOTICE = "评分以大众点评 App 为准。"
+DISTANCE_GAP = "来源没有写到地铁站的步行时间或距离，精确距离无法确认。"
+DEFAULT_CITATION_CHARS = 4000
+_CITE_ONLY = re.compile(r"^(?:\s*\[\d+\])+\s*$")
+_DECIMAL = re.compile(r"\d+\.\d+")
+_DISTANCE = re.compile(r"距[^。\n]{0,30}步行\s*\d+\s*分钟|步行\s*\d+\s*分钟")
 
 
 def ranking_requested(query: str) -> bool:
     return bool(_RANK_QUERY.search(query or ""))
 
 
+def citation_excerpt_limit() -> int:
+    raw = os.getenv("ASK_CITATION_CHARS") or str(DEFAULT_CITATION_CHARS)
+    try:
+        value = int(raw)
+    except ValueError:
+        value = DEFAULT_CITATION_CHARS
+    return min(max(value, 800), 8000)
+
+
 def citation_supports(claim: str, source: str) -> bool:
     """True when this sentence's facts, not just its topic, are in the excerpt."""
     body = _CITE.sub(" ", claim or "")
-    ranked = _ranked_items(body)
-    if len(ranked) >= 2:
-        return _order_preserved(ranked, source)
+    claimed = explicit_rank_entries(body)
+    if claimed:
+        stated = explicit_rank_entries(source or "")
+        if not stated:
+            return False
+        by_rank = {rank: name for rank, name, _price in stated}
+        for rank, name, _price in claimed:
+            source_name = by_rank.get(rank, "")
+            if not source_name or (name not in source_name and source_name not in name):
+                return False
+        return True
     claim_tokens = {token for token in tokens(body) if len(token) >= 2}
     if not claim_tokens:
         return False
@@ -397,24 +442,45 @@ def citation_supports(claim: str, source: str) -> bool:
     numbers = set(_NUMBER.findall(body))
     if numbers and not numbers <= set(_NUMBER.findall(source or "")):
         return False
+    decimals = set(_DECIMAL.findall(body))
+    if decimals and not decimals <= set(_DECIMAL.findall(source or "")):
+        return False
+    if _DISTANCE.search(body):
+        claimed_digits = set(re.findall(r"\d+", body))
+        if claimed_digits and not claimed_digits <= set(re.findall(r"\d+", source or "")):
+            return False
     return len(claim_tokens & source_tokens) / float(len(claim_tokens)) >= 0.5
 
 
 def drop_unsupported_citations(text: str, citations: list[dict[str, Any]]) -> str:
-    """Remove [n] from a line when that source does not state the line."""
+    """Drop [n] that the excerpt does not support, and drop the sentence if none remain."""
     by_n = {int(item["n"]): item for item in citations if isinstance(item.get("n"), int)}
     cleaned_lines: list[str] = []
     for line in (text or "").split("\n"):
-        def replace(match: re.Match[str], claim: str = line) -> str:
-            number = int(match.group(1))
-            item = by_n.get(number)
-            if item is None:
-                return match.group(0)
-            if citation_supports(claim, str(item.get("text") or "")):
-                return match.group(0)
-            return ""
+        if any(mark in line for mark in _KEEP_LINE):
+            cleaned_lines.append(line)
+            continue
+        kept: list[str] = []
+        for sentence in _sentence_pieces(line):
+            if not sentence.strip():
+                continue
+            had_cite = bool(_CITE.search(sentence))
 
-        cleaned_lines.append(_CITE.sub(replace, line))
+            def replace(match: re.Match[str], claim: str = sentence) -> str:
+                number = int(match.group(1))
+                item = by_n.get(number)
+                if item is None:
+                    return match.group(0)
+                if citation_supports(claim, str(item.get("text") or "")):
+                    return match.group(0)
+                return ""
+
+            cleaned = _CITE.sub(replace, sentence)
+            if had_cite and not _CITE.search(cleaned):
+                continue
+            kept.append(cleaned)
+        if kept:
+            cleaned_lines.append("".join(kept))
     cleaned = "\n".join(cleaned_lines)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -434,24 +500,121 @@ def ensure_score_notice(query: str, text: str, items: list[Evidence]) -> str:
     return f"{base}\n{NO_LIVE_SCORE}"
 
 
-def _ranked_items(text: str) -> list[str]:
-    found: list[str] = []
-    for match in _RANK_ITEM.finditer(text or ""):
-        name = re.sub(r"\s+", "", match.group(1)).strip("，,、 ")
-        if len(name) >= 2 and name not in found:
-            found.append(name)
-    return found
+def ensure_external_limits(query: str, text: str, items: list[Evidence]) -> str:
+    """Dianping scores and metro distances come only from excerpts. No map API."""
+    cleaned = _drop_invented_scores(text, items) if wants_dianping(query) else text
+    if wants_dianping(query) and DIANPING_NOTICE not in cleaned:
+        cleaned = f"{cleaned}\n{DIANPING_NOTICE}".strip() if cleaned.strip() else DIANPING_NOTICE
+    if wants_distance(query):
+        sourced = False
+        additions: list[str] = []
+        for item in items:
+            match = _DISTANCE.search(item.text or "")
+            if match is None:
+                continue
+            sourced = True
+            snippet = match.group(0).strip()
+            if snippet and snippet not in cleaned:
+                additions.append(f"{snippet}。[{item.n}]")
+        if additions:
+            cleaned = _join(cleaned, "\n".join(additions))
+        if not sourced and "精确距离" not in cleaned:
+            cleaned = f"{cleaned}\n{DISTANCE_GAP}".strip() if cleaned.strip() else DISTANCE_GAP
+    return cleaned
 
 
-def _order_preserved(items: list[str], source: str) -> bool:
-    compact = re.sub(r"\s+", "", source or "")
-    cursor = 0
+def wants_dianping(query: str) -> bool:
+    blob = query or ""
+    return "大众点评" in blob or "点评评分" in blob or "打分" in blob
+
+
+def wants_distance(query: str) -> bool:
+    blob = query or ""
+    return any(mark in blob for mark in ("地铁", "轨交", "步行", "距离"))
+
+
+def _drop_invented_scores(text: str, items: list[Evidence]) -> str:
+    known = set()
     for item in items:
-        pos = compact.find(item, cursor)
-        if pos < 0:
-            return False
-        cursor = pos + len(item)
-    return True
+        known.update(_DECIMAL.findall(item.text or ""))
+    kept: list[str] = []
+    for line in (text or "").split("\n"):
+        if DIANPING_NOTICE in line or DISTANCE_GAP in line:
+            kept.append(line)
+            continue
+        decimals = set(_DECIMAL.findall(line))
+        if decimals and not decimals <= known:
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _sentence_pieces(line: str) -> list[str]:
+    parts = [part for part in re.split(r"(?<=[。！？])", line or "") if part]
+    merged: list[str] = []
+    for part in parts:
+        if merged and _CITE_ONLY.match(part):
+            merged[-1] += part
+            continue
+        merged.append(part)
+    return merged
+
+
+def explicit_rank_entries(text: str) -> list[tuple[int, str, int | None]]:
+    """Ranks the excerpt actually writes, such as 「1.」「TOP1」 or 「第一名」."""
+    matches = list(_EXPLICIT_RANK.finditer(text or ""))
+    entries: list[tuple[int, str, int | None]] = []
+    seen: set[int] = set()
+    for index, match in enumerate(matches):
+        rank = _rank_number(match.group(1) or match.group(2) or match.group(3) or "")
+        if rank <= 0 or rank in seen:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text or "")
+        span = (text or "")[match.end() : end]
+        name = _entry_name(span)
+        if len(name) < 2:
+            continue
+        seen.add(rank)
+        entries.append((rank, name, _entry_price(span)))
+    return entries
+
+
+def format_rank_block(query: str, items: list[Evidence]) -> str:
+    """Render list articles without turning excerpt order into a rank."""
+    cap = budget_limit(query)
+    lines: list[str] = []
+    for item in items:
+        if not _is_list_article(item, query):
+            continue
+        label = _list_label(item.title)
+        ranked = explicit_rank_entries(item.text)
+        if ranked:
+            for rank, name, price in ranked:
+                if cap is not None and price is not None and price > cap:
+                    lines.append(f"超出预算未列入：{name}（人均{price}）。")
+                    continue
+                shown = _with_price_flag(name, price, cap)
+                lines.append(f"据《{label}》榜单第{rank}名：{shown}。[{item.n}]")
+            continue
+        entries = _unranked_entries(item.text)
+        if len(entries) < 2:
+            continue
+        kept: list[str] = []
+        for name, price in entries:
+            if cap is not None and price is not None and price > cap:
+                lines.append(f"超出预算未列入：{name}（人均{price}）。")
+                continue
+            kept.append(_with_price_flag(name, price, cap))
+        if kept:
+            lines.append(f"{label}榜单收录了：{'、'.join(kept)}（来源未标名次）。[{item.n}]")
+    return "\n".join(lines)
+
+
+def budget_limit(text: str) -> int | None:
+    match = _BUDGET.search(text or "")
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[str, str]]:
@@ -459,13 +622,26 @@ def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[st
         "你是问答助手。只根据给出的编号和摘录用中文回答。"
         "每条要点用 [n] 引用，只能使用下面出现过的编号，不要编造编号或摘录之外的事实。"
         "每一条要点的 [n] 只能标在直接写出该句事实的摘录上，不能标在仅仅话题相关的来源上。"
+        "没有摘录支撑的句子不要写。"
     )
-    if ranking_requested(query):
+    if ranking_requested(query) or any(_is_list_article(item, query) for item in items):
         system += (
             "用户要的是排名、榜单或 top。"
-            "摘录里如果已经有榜单，按原顺序原样写出，不要自己重排，也不要编造名次或名称。"
-            "每一份榜单只引用它出自的那篇文章的编号。"
+            "只有摘录里出现「1.」「TOP1」「第一名」这类名次标记时，才写成「据X榜单第N名」，并引用那篇文章。"
+            "标题像榜单但摘录没有名次时，写成「X榜单收录了：A、B、C（来源未标名次）」，不要把原文顺序当成名次。"
             "如果摘录里没有实时评分或口碑分数，要明确写出没有。"
+            "用户给了人均预算时，超过预算的不要列入，摘录没写价格的要标价格未知。"
+        )
+    if wants_dianping(query):
+        system += (
+            "用户要大众点评分数。不能抓取大众点评，也不要编造分数。"
+            "摘录里没有的分数不要写。必须写「评分以大众点评 App 为准」。"
+        )
+    if wants_distance(query):
+        system += (
+            "用户关心到地铁站的距离。不要调用地图。"
+            "只有摘录写了「距某站步行X分钟」这类原句才能写距离并引用；"
+            "摘录没有时要写明精确距离无法确认。"
         )
     if conflict:
         system += (
@@ -630,6 +806,116 @@ def prompt_excerpt_limit() -> int:
     except ValueError:
         return 1200
     return min(max(value, 200), 4000)
+
+
+def _regenerate_thin(
+    query: str,
+    text: str,
+    items: list[Evidence],
+    citations: list[dict[str, Any]],
+    complete: Complete,
+) -> tuple[str, int, int]:
+    if not items or not _needs_regen(text):
+        return text, 0, 0
+    cited = {int(match) for match in _CITE.findall(text or "")}
+    chosen = [item for item in items if item.n in cited] or list(items)
+    try:
+        raw, prompt_tokens, completion_tokens = complete(_regen_messages(query, chosen))
+    except Exception:
+        return text, 0, 0
+    rewritten = drop_unsupported_citations(_finalize(raw, chosen, False), citations)
+    if _CITE.search(rewritten):
+        return rewritten, prompt_tokens, completion_tokens
+    return text, prompt_tokens, completion_tokens
+
+
+def _regen_messages(query: str, items: list[Evidence]) -> list[dict[str, str]]:
+    messages = _messages(query, items, False)
+    messages[0]["content"] += "上一段删掉没有出处的句子后只剩一两句。请只根据这些摘录重写成连贯的短段，每句都要有对得上的 [n]。不要编造名次。"
+    return messages
+
+
+def _needs_regen(text: str) -> bool:
+    return len(_cited_sentences(text)) <= 2
+
+
+def _cited_sentences(text: str) -> list[str]:
+    found: list[str] = []
+    for line in (text or "").split("\n"):
+        if any(mark in line for mark in _KEEP_LINE):
+            continue
+        for part in re.split(r"[。！？]", line):
+            part = part.strip()
+            if part and _CITE.search(part):
+                found.append(part)
+    return found
+
+
+def _is_list_article(item: Evidence, query: str) -> bool:
+    if _LIST_TITLE.search(item.title or ""):
+        return True
+    if ranking_requested(query) and (explicit_rank_entries(item.text) or "·" in (item.text or "")):
+        return True
+    return False
+
+
+def _list_label(title: str) -> str:
+    label = re.sub(r"\s+", "", title or "").strip("《》")
+    return label or "该来源"
+
+
+def _rank_number(raw: str) -> int:
+    text = (raw or "").strip()
+    if text.isdigit():
+        return int(text)
+    return _CN_RANK.get(text, 0)
+
+
+def _unranked_entries(text: str) -> list[tuple[str, int | None]]:
+    parts = [part.strip() for part in re.split(r"\s*[·•|]\s*", text or "") if part.strip()]
+    if len(parts) < 2:
+        return []
+    entries: list[tuple[str, int | None]] = []
+    seen: set[str] = set()
+    for part in parts:
+        if explicit_rank_entries(part):
+            continue
+        name = _entry_name(part)
+        if len(name) < 2 or name in seen:
+            continue
+        seen.add(name)
+        entries.append((name, _entry_price(part)))
+    return entries
+
+
+def _entry_name(span: str) -> str:
+    piece = re.split(r"[。；;\n]", span or "")[0]
+    if "：" in piece:
+        piece = piece.split("：")[-1]
+    if ":" in piece:
+        piece = piece.split(":")[-1]
+    piece = _PRICE.sub("", piece)
+    piece = re.sub(r"\d+\s*元", "", piece)
+    piece = re.sub(r"\s+", "", piece).strip(" ，,、:：·•-—")
+    return piece[:24]
+
+
+def _entry_price(span: str) -> int | None:
+    match = _PRICE.search(span or "")
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _with_price_flag(name: str, price: int | None, cap: int | None) -> str:
+    if cap is not None and price is None:
+        return f"{name}（价格未知）"
+    return name
+
+
+def _join(left: str, right: str) -> str:
+    parts = [part.strip() for part in (left, right) if part and part.strip()]
+    return "\n".join(parts)
 
 
 def _excerpt(text: str, limit: int) -> str:

@@ -34,6 +34,12 @@ _PLAN_SYSTEM = (
     "如果地名、人名或其他实体有多个常见所指，need_clarify 必须为 yes，"
     "ambiguities 列出每个原词和候选；没有歧义时 ambiguities 为 []。"
     "不要编造候选，也不要把没有歧义的词写进去。"
+    "如果 brief_status 是 clarified，说明已经澄清过，need_clarify 必须为 no，ambiguities 为 []，"
+    "queries 要写进 scope 和 constraints。"
+    "美食、餐厅、景点、旅游、出行、附近玩这类本地生活问题，sources 只选 web；"
+    "只有用户明确要查笔记、本地文件或知识库时才加入 ima 或 local。"
+    "地点还没写死、或菜系、排名标准、价格、离地铁远近有缺时，need_clarify 必须为 yes，"
+    "不要擅自选定其中一个地点；ambiguities 列出该地点的多个候选。"
 )
 
 _SOURCE_ALIASES = {
@@ -164,6 +170,7 @@ def _plan_input(context: Mapping[str, Any]) -> dict[str, Any]:
         "text": str(context.get("text") or ""),
         "brief_status": context.get("brief_status"),
         "scope": context.get("scope"),
+        "constraints": context.get("constraints") or "",
         "kb_name": context.get("kb_name") or "",
         "clarify": context.get("clarify") or "auto",
     }
