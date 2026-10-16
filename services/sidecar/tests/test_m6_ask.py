@@ -1255,8 +1255,9 @@ def test_rank_markers_budget_and_uncited_sentences() -> None:
     assert "第1名" not in result.text
     assert "丁餐厅" not in result.text
     assert "按人均100元以内筛选" in result.text
-    assert "已排除高于人均100元的" in result.text
-    assert "乙餐厅人均150" in result.text
+    assert result.text.count("按人均100元以内筛选") == 1
+    assert "已排除" not in result.text
+    assert "乙餐厅" not in result.text
     assert NO_LIVE_SCORE in result.text
     assert "甲餐厅人均80" in result.text
     assert calls["n"] == 2
@@ -1384,7 +1385,7 @@ def test_dianping_scores_and_metro_distance_stay_inside_sources() -> None:
         system = messages[0]["content"]
         assert "评分以大众点评 App 为准" in system
         assert "不要调用地图" in system
-        return "甲餐厅大众点评 4.9 分，距娄山关路站步行3分钟。[1]", 1, 1
+        return "甲餐厅大众点评 4.9 分。[1]\n距娄山关路站步行8分钟。[1]", 1, 1
 
     cited = synthesize(
         "上海古北 大众点评打分 离地铁站近的日料",
@@ -1404,7 +1405,7 @@ def test_dianping_scores_and_metro_distance_stay_inside_sources() -> None:
     assert "步行3" not in cited.text
     assert "距娄山关路站步行8分钟" in cited.text
     assert "[1]" in cited.text
-    assert DIANPING_NOTICE in cited.text
+    assert cited.text.count(DIANPING_NOTICE) == 1
     assert DISTANCE_GAP not in cited.text
 
     def bare(messages: list[dict[str, str]]) -> tuple[str, int, int]:
@@ -1465,13 +1466,14 @@ def test_rank_claim_without_verbatim_marker_is_dropped() -> None:
     assert "榜单第" not in result.text
     assert "第1名" not in result.text
     assert "没找到可引用的来源" in result.text
-    assert "《旧文》为2018年资料，可能已过时。" in result.text
+    assert "年资料" not in result.text
+    assert "已排除" not in result.text
     assert "2018元" not in result.text
 
 
-def test_affordable_price_states_the_cap_and_flags_expensive_items() -> None:
+def test_affordable_price_states_the_assumption_without_pasting_the_page() -> None:
     def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
-        return "甲餐厅人均80。\n[1]\n乙餐厅¥368。\n[1]", 1, 1
+        return "甲餐厅人均80。\n[1]", 1, 1
 
     result = synthesize(
         "上海古北 价格亲民 日料",
@@ -1480,19 +1482,21 @@ def test_affordable_price_states_the_cap_and_flags_expensive_items() -> None:
                 {
                     "title": "菜单",
                     "url": "https://example.com/m",
-                    "text": "甲餐厅人均80。乙餐厅¥368。丙餐厅¥400。",
+                    "text": "甲餐厅人均80。环境、交通、优惠等更多信息>> 4.6 乙餐厅¥368。丙餐厅¥400。",
                     "source": "web",
                 }
             ]
         },
         complete=complete,
     )
-    assert "按人均150元以内筛选" in result.text
+    assert result.text.count("把“价格亲民”按人均150元以内理解") == 1
+    assert result.text.count("按人均150元以内筛选") == 1
     assert "甲餐厅人均80" in result.text
-    assert "已排除高于人均150元的" in result.text
-    assert "¥368" in result.text
-    assert "¥400" in result.text
-    assert "乙餐厅¥368。" not in result.text
+    assert "已排除" not in result.text
+    assert "更多信息" not in result.text
+    assert "4.6" not in result.text
+    assert "¥368" not in result.text
+    assert "¥400" not in result.text
 
 
 def test_recent_sources_sort_ahead_of_undated_and_old() -> None:
@@ -1516,8 +1520,10 @@ def test_web_search_merges_each_short_query(monkeypatch: pytest.MonkeyPatch) -> 
     calls: list[str] = []
 
     def fake_search(query: str, limit: int = 5) -> WebSearchResult:
-        del limit
+        assert limit == 20
         calls.append(query)
+        if "site:" in query:
+            return WebSearchResult(hits=[])
         pages = {
             "上海古北 日料 人均": "https://example.com/a",
             "古北 日料 地铁站 步行": "https://example.com/b",
@@ -1525,7 +1531,7 @@ def test_web_search_merges_each_short_query(monkeypatch: pytest.MonkeyPatch) -> 
         }
         notice = NO_WEB_RESULT if query.endswith("大众点评") else None
         return WebSearchResult(
-            hits=[{"title": query, "url": pages[query], "text": "甲餐厅", "position": 9}],
+            hits=[{"title": query, "url": pages[query], "text": "日料 甲餐厅", "position": 9}],
             notice=notice,
         )
 
@@ -1544,7 +1550,10 @@ def test_web_search_merges_each_short_query(monkeypatch: pytest.MonkeyPatch) -> 
         verify="auto",
         registry=None,
     )
-    assert calls == ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"]
+    expected_calls: list[str] = []
+    for query in ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"]:
+        expected_calls.extend([query, f"{query} site:dianping.com", f"{query} site:xiaohongshu.com"])
+    assert calls == expected_calls
     assert [item["url"] for item in groups["web"]] == ["https://example.com/a", "https://example.com/b"]
     assert NO_WEB_RESULT not in notices
 
@@ -1592,3 +1601,175 @@ def test_length_finish_raises_max_tokens(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert calls == [2048, 4096]
     assert prompt == 3
     assert completion == 4
+
+
+def test_fixed_notes_are_emitted_once() -> None:
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        return (
+            "按人均150元以内筛选。甲餐厅人均80。[1]\n"
+            "按人均150元以内筛选。\n"
+            "评分以大众点评 App 为准。\n"
+            "评分以大众点评 App 为准。"
+        ), 1, 1
+
+    result = synthesize(
+        "价格亲民 大众点评 日料",
+        {"web": [{"title": "菜单", "url": "https://example.com/m", "text": "日料 甲餐厅人均80。", "source": "web"}]},
+        complete=complete,
+    )
+    assert result.text.count("按人均150元以内筛选") == 1
+    assert result.text.count("评分以大众点评 App 为准") == 1
+    assert result.text.count("把“价格亲民”按人均150元以内理解") == 1
+    assert "已排除" not in result.text
+
+
+def test_staleness_uses_one_date_and_drops_notes_that_are_the_only_citation() -> None:
+    from app.ask.synthesize import source_year
+
+    assert source_year("2015年指南", "正文里提到2013年") == 2015
+    assert source_year("旧文", "2013年开业，2018年仍在。") == 2018
+
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        return (
+            "甲餐厅是日料。[1]\n"
+            "《2018年旧文》为2013年资料，可能已过时。[1]\n"
+            "《2018年旧文》为2018年资料，可能已过时。[1]\n"
+            "《旁支》为2018年资料，可能已过时。[2]"
+        ), 1, 1
+
+    result = synthesize(
+        "日料推荐",
+        {
+            "web": [
+                {
+                    "title": "2018年旧文",
+                    "url": "https://example.com/a",
+                    "text": "甲餐厅是日料。文中也提到2013年。",
+                    "source": "web",
+                },
+                {
+                    "title": "旁支",
+                    "url": "https://example.com/b",
+                    "text": "2018年的另一家店。",
+                    "source": "web",
+                },
+            ]
+        },
+        complete=complete,
+    )
+    assert "2013年资料" not in result.text
+    assert "2018年资料" in result.text
+    assert "旁支" not in result.text
+    assert [item["title"] for item in result.citations] == ["2018年旧文"]
+
+
+def test_uncited_score_is_removed() -> None:
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        return "甲餐厅 4.6。\n乙餐厅人均80。[1]", 1, 1
+
+    result = synthesize(
+        "附近餐厅",
+        {"web": [{"title": "菜单", "url": "https://example.com/m", "text": "乙餐厅人均80。另有评分 4.6。", "source": "web"}]},
+        complete=complete,
+    )
+    assert "4.6" not in result.text
+    assert "乙餐厅人均80" in result.text
+    assert result.citations
+
+
+def test_cuisine_filter_drops_other_food_and_adds_site_queries(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ask.pipeline import _retrieve
+    from app.web_search.live import WebSearchResult
+
+    calls: list[tuple[str, int]] = []
+
+    def fake_search(query: str, limit: int = 5) -> WebSearchResult:
+        calls.append((query, limit))
+        if "site:" in query or query == "第一性原理 定义":
+            return WebSearchResult(hits=[])
+        return WebSearchResult(
+            hits=[
+                {"title": "寿司店", "url": "https://example.com/sushi", "text": "这家是日料寿司"},
+                {"title": "咖喱店", "url": "https://example.com/curry", "text": "咖喱饭很好吃"},
+            ]
+        )
+
+    def fake_enrich(hits, **kwargs):
+        del kwargs
+        return list(hits)
+
+    monkeypatch.setattr("app.ask.pipeline.search_web", fake_search)
+    monkeypatch.setattr("app.ask.pipeline.enrich_web_hits", fake_enrich)
+    groups, _notices = _retrieve(
+        ["上海古北 日料 人均", "古北 日料 地铁站 步行"],
+        ["web"],
+        kb_name="",
+        brief=None,
+        mode="personal",
+        verify="auto",
+        registry=None,
+        context="上海古北 日料",
+    )
+    assert [item["title"] for item in groups["web"]] == ["寿司店"]
+    assert all(limit == 20 for _query, limit in calls)
+    assert "上海古北 日料 人均 site:dianping.com" in [query for query, _limit in calls]
+    assert "古北 日料 地铁站 步行 site:xiaohongshu.com" in [query for query, _limit in calls]
+
+    calls.clear()
+    _retrieve(
+        ["第一性原理 定义"],
+        ["web"],
+        kb_name="",
+        brief=None,
+        mode="personal",
+        verify="auto",
+        registry=None,
+        context="第一性原理 定义",
+    )
+    assert calls == [("第一性原理 定义", 20)]
+
+
+def test_serper_requests_twenty_results(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SERPER_API_KEY", SERPER_KEY)
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    captured: dict = {}
+
+    def fake_post(url, body, headers):
+        del url, headers
+        captured["body"] = body
+        return 200, {"organic": []}
+
+    monkeypatch.setattr("app.web_search.live._post_json", fake_post)
+    from app.web_search.live import SerperProvider
+
+    SerperProvider().fetch("古北 日料", limit=20)
+    assert captured["body"] == {"q": "古北 日料", "num": 20}
+
+    seen: dict = {}
+
+    def fake_fetch(self, query, *, limit):
+        del self, query
+        seen["limit"] = limit
+        return [], 200
+
+    monkeypatch.setattr("app.web_search.live.SerperProvider.fetch", fake_fetch)
+    found = search_web("日料", limit=20)
+    assert seen["limit"] == 20
+    assert found.hits == []
+
+
+def test_one_year_orders_old_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ask.synthesize import prefer_recent
+    from app.web_search.page import fetch_limit
+
+    monkeypatch.delenv("ASK_WEB_FETCH_N", raising=False)
+    ordered = prefer_recent(
+        [
+            {"title": "早", "text": "2015年的记录"},
+            {"title": "混", "text": "文中提到2013年，2018年仍在营业"},
+        ]
+    )
+    assert [item["title"] for item in ordered] == ["混", "早"]
+    assert fetch_limit() == 12

@@ -29,7 +29,7 @@ _BINARY = ("image/", "audio/", "video/", "pdf", "octet-stream", "zip", "gzip")
 
 
 def fetch_limit() -> int:
-    return _bounded_int("ASK_WEB_FETCH_N", default=4, low=0, high=8)
+    return _bounded_int("ASK_WEB_FETCH_N", default=12, low=0, high=20)
 
 
 def enrich_web_hits(
@@ -39,7 +39,7 @@ def enrich_web_hits(
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Replace the snippet on the first ``limit`` http(s) hits when the page has text."""
-    bounded = fetch_limit() if limit is None else max(0, min(int(limit), 8))
+    bounded = fetch_limit() if limit is None else max(0, min(int(limit), 20))
     fetcher = fetch or fetch_page_text
     updated: list[dict[str, Any]] = []
     used = 0
