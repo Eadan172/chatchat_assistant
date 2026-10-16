@@ -53,6 +53,7 @@ class DesignNode:
     presented_text: str | None = None
     presented_recommendation: str | None = None
     presented_reason: str | None = None
+    options: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +69,7 @@ class DesignNode:
             "presented_text": self.presented_text,
             "presented_recommendation": self.presented_recommendation,
             "presented_reason": self.presented_reason,
+            "options": list(self.options),
         }
 
     @classmethod
@@ -85,15 +87,19 @@ class DesignNode:
             presented_text=raw.get("presented_text"),
             presented_recommendation=raw.get("presented_recommendation"),
             presented_reason=raw.get("presented_reason"),
+            options=[str(item) for item in raw.get("options") or [] if str(item).strip()],
         )
 
-    def public_question(self) -> dict[str, str]:
-        return {
+    def public_question(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "id": self.id,
             "text": self.presented_text or self.text,
             "recommendation": self.presented_recommendation or self.recommendation,
             "reason": self.presented_reason or self.reason,
         }
+        if self.options:
+            payload["options"] = list(self.options)
+        return payload
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -343,9 +349,111 @@ def clean_ambiguities(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             text = str(value).strip()
             if text and text != term and text not in options:
                 options.append(text)
-        if term and len(options) >= 2:
+        if not term or _PREFERENCE.search(term):
+            continue
+        if len(options) >= 2:
             found.append({"term": term, "options": options[:6]})
     return found
+
+
+_PREFERENCE = re.compile(r"价格|亲民|人均|预算|便宜|贵|地铁|距离|步行|口味|菜系|评分|点评|最近|交通|不限")
+
+
+_FOOD = ("美食", "餐厅", "饭店", "餐馆", "小吃", "日料", "料理", "寿司")
+_FOOD_INTENT = ("排名", "榜", "附近", "玩", "最好", "最高", "推荐", "打分")
+_CUISINE = ("日料", "日本料理", "寿司", "火锅", "中餐", "西餐", "川菜", "本帮", "烤肉")
+_BASIS = ("大众点评", "点评评分", "评分", "口碑")
+_PRICE_MARK = ("价格亲民", "人均", "预算", "便宜")
+_METRO = ("地铁", "轨交", "步行")
+
+
+def vague_food_query(text: str) -> bool:
+    """A nearby-food question that still leaves place, cuisine, score, price, or metro open."""
+    blob = text or ""
+    if not any(mark in blob for mark in _FOOD):
+        return False
+    if not any(mark in blob for mark in _FOOD_INTENT):
+        return False
+    specified = (
+        any(mark in blob for mark in _CUISINE),
+        any(mark in blob for mark in _BASIS),
+        any(mark in blob for mark in _PRICE_MARK),
+        any(mark in blob for mark in _METRO),
+    )
+    return not all(specified)
+
+
+def specified_food_query(text: str) -> bool:
+    """Food question that already names cuisine, score basis, price, and metro."""
+    blob = text or ""
+    if not any(mark in blob for mark in _FOOD):
+        return False
+    cuisine = any(mark in blob for mark in _CUISINE)
+    basis = any(mark in blob for mark in _BASIS) or "打分" in blob
+    price = any(mark in blob for mark in _PRICE_MARK)
+    metro = any(mark in blob for mark in _METRO) or "距离" in blob
+    return cuisine and basis and price and metro
+
+
+def _choice_node(node_id: str, prompt: str, options: list[str], reason: str) -> DesignNode:
+    lines = [prompt, *(f"{number}. {option}" for number, option in enumerate(options, start=1))]
+    return DesignNode(
+        id=node_id,
+        text="\n".join(lines),
+        recommendation="",
+        reason=reason,
+        depends_on=[],
+        options=list(options),
+    )
+
+
+def _food_probe_nodes(ambiguities: list[dict[str, Any]], max_questions: int) -> list[DesignNode]:
+    """Ask place, cuisine, ranking basis, price, and metro. Never default a place."""
+    nodes: list[DesignNode] = []
+    if ambiguities:
+        for index, item in enumerate(ambiguities):
+            if len(nodes) >= max_questions:
+                break
+            options = list(item["options"])
+            nodes.append(
+                _choice_node(
+                    f"ambiguity-{index}",
+                    f"「{item['term']}」指的是哪一个？",
+                    options,
+                    "地点有多个常见所指，必须由你选定，不能默认其中一个。",
+                )
+            )
+    else:
+        nodes.append(
+            DesignNode(
+                id="probe-place",
+                text="这次说的地点具体是哪一个？请写清楚，不要用可能有多种所指的简称。",
+                recommendation="",
+                reason="地点没写清楚时不能默认一个地方。",
+                depends_on=[],
+            )
+        )
+    specs = (
+        ("probe-cuisine", "想吃哪一类？", ["日料", "中餐", "火锅", "西餐", "不限菜系"], "菜系会改变该看哪些店。"),
+        (
+            "probe-basis",
+            "排名按什么标准？",
+            ["大众点评评分", "榜单名次", "不限"],
+            "大众点评分数以 App 为准，网页摘录里没有的分数不能编。",
+        ),
+        ("probe-price", "价格有什么要求？", ["价格亲民", "人均100以内", "不限预算"], "预算用来筛掉超标的店。"),
+        (
+            "probe-metro",
+            "对距离和交通有什么要求？",
+            ["离地铁站近", "不限距离"],
+            "步行距离只采用来源里写明的句子，没有就不编。",
+        ),
+    )
+    for node_id, prompt, options, reason in specs:
+        if len(nodes) >= max_questions:
+            break
+        nodes.append(_choice_node(node_id, prompt, options, reason))
+    return nodes
 
 
 def build_tree(
@@ -356,6 +464,13 @@ def build_tree(
 ) -> DesignTree:
     cleaned = clean_ambiguities(ambiguities)
     hint = (domain_hint or "").strip().lower() or None
+    if vague_food_query(keyword):
+        return DesignTree(
+            keyword=keyword,
+            domain_hint=hint,
+            max_questions=max_questions,
+            nodes=_food_probe_nodes(cleaned, max_questions),
+        )
     if cleaned:
         return DesignTree(
             keyword=keyword,
@@ -402,9 +517,10 @@ def _ambiguity_nodes(items: list[dict[str, Any]], max_questions: int) -> list[De
             DesignNode(
                 id=node_id,
                 text="\n".join(lines),
-                recommendation=options[0],
-                reason="这个词有多个常见所指，先选定再检索。",
+                recommendation="",
+                reason="这个词有多个常见所指，先选定再检索。不要默认其中一个。",
                 depends_on=[],
+                options=options,
             )
         )
     if reserve_budget and len(nodes) < max_questions:
@@ -432,8 +548,22 @@ def build_clarified_brief(tree: DesignTree) -> dict[str, Any]:
             values[field_name] = node.decision
         elif node.status == "parked":
             parked.append({"id": node.id, "reason": node.park_reason or "用户搁置"})
+    probe_place: list[str] = []
+    probe_limits: list[str] = []
+    for node in tree.nodes:
+        if node.status != "resolved" or not node.decision:
+            continue
+        if node.id == "probe-place":
+            probe_place.append(str(node.decision))
+        elif node.id.startswith("probe-"):
+            probe_limits.append(str(node.decision))
+    if probe_place:
+        scope_bits = [*probe_place, *scope_bits]
     if scope_bits:
         values["scope"] = "；".join(scope_bits)
+    if probe_limits:
+        existing = values.get("constraints")
+        values["constraints"] = "；".join([part for part in [existing, *probe_limits] if part])
     return {
         "brief": "clarified",
         "status": "clarified",

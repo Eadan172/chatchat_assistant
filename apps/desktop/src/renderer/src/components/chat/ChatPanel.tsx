@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import {
   answerAction,
+  askRequestBody,
   askSourceBadge,
+  canAcceptRecommendation,
   citationHref,
   originLabel,
   searchedLabel,
   searchingLabel,
+  type AskQuestion,
 } from '../ask/view'
 import { errorMessage, sidecarRequest, type SidecarEvent } from '../clarify/client'
 import { verifyItems } from '../verify/client'
@@ -19,12 +22,7 @@ interface FreshnessNote {
   prompt_update?: boolean
 }
 
-interface AskQuestionCard {
-  id: string
-  text: string
-  recommendation: string
-  reason: string
-}
+type AskQuestionCard = AskQuestion
 
 interface Turn {
   id: number
@@ -50,11 +48,15 @@ function asQuestion(data: unknown): AskQuestionCard | null {
   if (!data || typeof data !== 'object') return null
   const row = data as Record<string, unknown>
   if (typeof row.id !== 'string' || typeof row.text !== 'string') return null
+  const options = Array.isArray(row.options)
+    ? row.options.filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+    : []
   return {
     id: row.id,
     text: row.text,
     recommendation: typeof row.recommendation === 'string' ? row.recommendation : '',
     reason: typeof row.reason === 'string' ? row.reason : '',
+    options,
   }
 }
 
@@ -182,15 +184,15 @@ export function ChatPanel({
         sessionId: null,
       },
     ])
-    const body: Record<string, unknown> = { message: question, mode: 'personal' }
-    const named = kbName.trim()
-    if (named) body.kb_name = named
-    await postAsk(assistantId, body)
+    await postAsk(assistantId, askRequestBody(question, kbName))
   }
 
-  async function continueAsk(turn: Turn) {
+  async function continueAsk(turn: Turn, chosen?: string) {
     if (!turn.sessionId || !turn.question || pending) return
-    const action = answerAction(clarifyDraft)
+    const picked = (chosen || '').trim()
+    if (turn.question.options.length > 0 && !picked && !clarifyDraft.trim()) return
+    if (!picked && !canAcceptRecommendation(turn.question) && !clarifyDraft.trim()) return
+    const action = picked ? { action: 'edit' as const, value: picked } : answerAction(clarifyDraft)
     setClarifyDraft('')
     setError(null)
     setPending(true)
@@ -365,11 +367,27 @@ export function ChatPanel({
                 turn.role === 'assistant' && isNotFound(turn.content) ? 'text-sage' : 'text-ink'
               }`}
             >
-              {turn.content || (turn.pending ? '正在检索…' : '')}
+              {turn.content || (turn.pending && !turn.question ? '正在检索…' : '')}
             </p>
             {askOn && turn.role === 'assistant' && turn.question ? (
               <div className="mt-3 rounded-xl bg-mist px-4 py-3 text-left" data-testid="ask-clarify">
-                <p className="text-sm text-ink">{turn.question.text}</p>
+                <p className="whitespace-pre-wrap text-sm text-ink">{turn.question.text}</p>
+                {turn.question.options.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2" data-testid="ask-clarify-options">
+                    {turn.question.options.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        data-testid="ask-clarify-option"
+                        className="rounded-full bg-white px-3 py-1 text-sm text-ink ring-1 ring-pool disabled:opacity-50"
+                        disabled={pending}
+                        onClick={() => void continueAsk(turn, option)}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 {turn.question.recommendation ? (
                   <p className="mt-2 text-xs text-sage">建议：{turn.question.recommendation}</p>
                 ) : null}
@@ -378,14 +396,14 @@ export function ChatPanel({
                   data-testid="ask-clarify-input"
                   className="mt-3 w-full rounded-full bg-white px-4 py-2 text-sm outline-none ring-1 ring-pool"
                   value={clarifyDraft}
-                  placeholder="留空则采用建议"
+                  placeholder={turn.question.options.length > 0 ? '或自己填写' : '留空则采用建议'}
                   onChange={(event) => setClarifyDraft(event.target.value)}
                 />
                 <button
                   type="button"
                   data-testid="ask-clarify-continue"
                   className="mt-3 rounded-full bg-sage px-4 py-2 text-sm text-white disabled:opacity-50"
-                  disabled={pending}
+                  disabled={pending || (!clarifyDraft.trim() && !canAcceptRecommendation(turn.question))}
                   onClick={() => void continueAsk(turn)}
                 >
                   继续

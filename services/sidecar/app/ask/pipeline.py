@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from app.ask.redact import install_redaction
-from app.ask.synthesize import synthesize
+from app.ask.synthesize import normalize_url, prefer_recent, synthesize
+from app.clarifier.design_tree import specified_food_query, vague_food_query
 from app.clarifier.session import (
     ClarifyError,
     answer_session,
@@ -31,6 +32,7 @@ from app.web_search.page import enrich_web_hits
 logger = logging.getLogger(__name__)
 
 ASK_CLARIFY_LIMIT = 3
+FOOD_CLARIFY_LIMIT = 5
 SOURCE_ORDER = ("local", "ima", "web")
 
 
@@ -83,14 +85,16 @@ def iter_ask(
         return
 
     plan = decide(text, brief=None, kb_name=name, clarify=clarify)
-    if _wants_clarify(plan, clarify):
+    specified = specified_food_query(text)
+    probe = vague_food_query(text) and not specified
+    if clarify != "skip" and not specified and (_wants_clarify(plan, clarify) or probe):
         view = start_session(
             db,
             keyword=text,
             conversation_id=None,
             domain_hint=None,
             skip=False,
-            max_questions=ASK_CLARIFY_LIMIT,
+            max_questions=FOOD_CLARIFY_LIMIT if probe else ASK_CLARIFY_LIMIT,
             ambiguities=plan.ambiguities,
         )
         yield from _clarify_events(view)
@@ -129,13 +133,15 @@ def decide(message: str, *, brief: dict[str, Any] | None, kb_name: str, clarify:
     if client is not None and hasattr(client, "plan"):
         try:
             raw = client.plan(context)
-            sources = _with_named_kb(list(raw["sources"]), kb_name)
+            ambiguities = [] if context.get("has_brief") else list(raw.get("ambiguities") or [])
+            need = "no" if context.get("has_brief") else str(raw["need_clarify"])
+            sources = _route_sources(list(raw["sources"]), message, kb_name)
             return Plan(
-                need_clarify=str(raw["need_clarify"]),
+                need_clarify=need,
                 sources=sources,
                 queries=list(raw["queries"]) or [message],
                 backend="deepseek",
-                ambiguities=list(raw.get("ambiguities") or []),
+                ambiguities=ambiguities,
             )
         except DecisionUnavailable:
             logger.info("deepseek decision failed; using rule backend")
@@ -162,11 +168,16 @@ def _search_and_answer(
     from app.db.models import ClarifySession
 
     started = time.perf_counter()
-    plan = decide(message, brief=brief, kb_name=kb_name, clarify=clarify)
+    question = refined_question(message, brief)
+    routed_clarify = "skip" if _clarified(brief) else clarify
+    plan = decide(question, brief=brief, kb_name=kb_name, clarify=routed_clarify)
     sources = [name for name in SOURCE_ORDER if name in plan.sources]
-    queries = [item.strip() for item in plan.queries if item and item.strip()] or [message]
-    if message.strip() and message.strip() not in queries:
-        queries.append(message.strip())
+    queries = [item.strip() for item in plan.queries if item and item.strip()]
+    if not _clarified(brief):
+        original = (message or "").strip()
+        if original and original not in queries:
+            queries.append(original)
+    queries = queries[:3] or [question or message]
     yield "searching", {"sources": sources, "queries": queries, "backend": plan.backend, "fallback": plan.fallback}
     logger.info("ask search sources=%s backend=%s query_count=%s", ",".join(sources), plan.backend, len(queries))
     groups, notices = _retrieve(
@@ -190,7 +201,7 @@ def _search_and_answer(
         return complete_deepseek(messages)
 
     result = synthesize(
-        queries[0],
+        question or queries[0],
         groups,
         registry=registry,
         complete=None if missing_key else complete,
@@ -266,11 +277,35 @@ def _retrieve(
         if notice:
             notices.append(notice)
     if "web" in sources:
-        found = search_web(queries[0])
-        groups["web"] = enrich_web_hits(found.hits)
-        if found.notice:
-            notices.append(found.notice)
+        hits, web_notices = _search_web(queries)
+        groups["web"] = hits
+        notices.extend(web_notices)
     return groups, notices
+
+
+def _search_web(queries: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Search each short query and merge hits, dropping duplicate URLs."""
+    from app.web_search.live import NO_WEB_RESULT
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    notices: list[str] = []
+    for query in queries:
+        found = search_web(query)
+        if found.notice and found.notice not in notices:
+            notices.append(found.notice)
+        batch: list[str] = []
+        for hit in found.hits:
+            url = normalize_url(str(hit.get("url") or "")) or str(hit.get("url") or "").strip()
+            if url and url in seen:
+                continue
+            if url:
+                batch.append(url)
+            merged.append(hit)
+        seen.update(batch)
+    if merged:
+        notices = [note for note in notices if note != NO_WEB_RESULT]
+    return enrich_web_hits(prefer_recent(merged)), notices
 
 
 def _search_local(queries: list[str], *, brief: dict[str, Any] | None, mode: str, registry) -> list[dict[str, Any]]:
@@ -405,7 +440,7 @@ def _rule_plan(message: str, brief: dict[str, Any] | None, kb_name: str, clarify
             sources.append("ima")
         elif name in {"local", "web"} and name not in sources:
             sources.append(name)
-    sources = _with_named_kb(sources, kb_name)
+    sources = _route_sources(sources, message, kb_name)
     queries = [message.strip()] if message.strip() else []
     scope = scope_text(brief)
     if scope:
@@ -415,6 +450,52 @@ def _rule_plan(message: str, brief: dict[str, Any] | None, kb_name: str, clarify
     if not queries:
         queries = [message or kb_name or "检索"]
     return Plan(answer, sources, queries[:3], "rule", fallback)
+
+
+_LIFE = ("美食", "餐厅", "饭店", "餐馆", "小吃", "景点", "旅游", "旅行", "出行", "酒店", "攻略", "附近", "游玩", "去玩", "玩", "日料", "料理", "寿司")
+_LIBRARY = ("笔记", "本地", "知识库", "ima", "收藏", "文件")
+
+
+def life_web_only(text: str) -> bool:
+    """Food, place, and travel questions are answered from the live web."""
+    blob = text or ""
+    if any(mark.lower() in blob.lower() for mark in _LIBRARY):
+        return False
+    return any(mark in blob for mark in _LIFE)
+
+
+def refined_question(message: str, brief: dict[str, Any] | None) -> str:
+    """Fold the chosen place and constraints into the question after clarification."""
+    base = (message or "").strip()
+    if not _clarified(brief) or not isinstance(brief, dict):
+        return base
+    bits: list[str] = []
+    for key in ("scope", "constraints"):
+        value = brief.get(key)
+        if not isinstance(value, str):
+            continue
+        text = value.strip().rstrip("。")
+        if not text or text in {"预算不限，口味不限"}:
+            continue
+        if text not in base and text not in bits:
+            bits.append(text)
+    if not bits:
+        return base
+    return " ".join([*bits, base] if base else bits).strip()
+
+
+def _clarified(brief: dict[str, Any] | None) -> bool:
+    if not isinstance(brief, dict):
+        return False
+    status = brief.get("status") or brief.get("brief")
+    return status == "clarified"
+
+
+def _route_sources(sources: list[str], message: str, kb_name: str) -> list[str]:
+    ordered = _with_named_kb(sources, kb_name)
+    if life_web_only(message) and not (kb_name or "").strip():
+        return ["web"]
+    return ordered
 
 
 def _with_named_kb(sources: list[str], kb_name: str) -> list[str]:
@@ -438,9 +519,19 @@ def _context(message: str, brief: dict[str, Any] | None, kb_name: str, clarify: 
         "has_brief": status == "clarified",
         "brief_status": status,
         "scope": scope_text(brief),
+        "constraints": _constraint_text(brief),
         "kb_name": kb_name,
         "sources": None,
     }
+
+
+def _constraint_text(brief: dict[str, Any] | None) -> str:
+    if not isinstance(brief, dict):
+        return ""
+    value = brief.get("constraints")
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
 
 
 def _deltas(text: str) -> list[str]:

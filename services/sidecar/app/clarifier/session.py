@@ -387,7 +387,11 @@ def _present_current(tree: DesignTree) -> bool:
     current = tree.current()
     if current is None:
         return False
-    if current.presented_text and current.presented_recommendation and current.presented_reason:
+    if (
+        current.presented_text
+        and current.presented_reason
+        and current.presented_recommendation is not None
+    ):
         return False
     text, recommendation, reason = render_question(
         node_id=current.id,

@@ -29,11 +29,18 @@ _PLAN_SYSTEM = (
     '"ambiguities":[{"term":"原词","options":["候选一","候选二"]}]}。'
     "sources 只能从 web、ima、local 里选择。"
     "web 表示联网，ima 表示 ima 知识库，local 表示本地库。"
-    "queries 是 1 到 3 条改写后的中文检索词。"
+    "queries 是 2 到 3 条简短检索词，例如「上海古北 日料 人均」「古北 日料 地铁站 步行」「古北 日料 大众点评」。"
+    "不要把原问题和澄清答案用分号拼成一条长句。"
     "问题含糊、范围不清时 need_clarify 为 yes；问题已经明确时为 no。"
-    "如果地名、人名或其他实体有多个常见所指，need_clarify 必须为 yes，"
-    "ambiguities 列出每个原词和候选；没有歧义时 ambiguities 为 []。"
-    "不要编造候选，也不要把没有歧义的词写进去。"
+    "ambiguities 只放有多个常见所指的实体，例如地名或人名。"
+    "价格亲民、离地铁近、口味、预算这类偏好不是歧义，不要写进 ambiguities。"
+    "没有这类实体时 ambiguities 为 []，也不要编造候选。"
+    "如果 brief_status 是 clarified，need_clarify 必须为 no，ambiguities 为 []，"
+    "queries 用 scope 和 constraints 改写成上面这种短检索词。"
+    "美食、餐厅、景点、旅游、出行、附近玩这类本地生活问题，sources 只选 web；"
+    "只有用户明确要查笔记、本地文件或知识库时才加入 ima 或 local。"
+    "地点实体还没写死时 need_clarify 为 yes，不要擅自选定其中一个地点。"
+    "价格、菜系、离地铁远近已经写在问题里时，不要为此再澄清。"
 )
 
 _SOURCE_ALIASES = {
@@ -135,7 +142,11 @@ def complete_deepseek(messages: list[dict[str, str]]) -> tuple[str, int, int]:
         raise DecisionUnavailable("deepseek key is not configured")
     base = (os.getenv("DEEPSEEK_BASE_URL") or DEFAULT_BASE).strip().rstrip("/")
     model = (os.getenv("DEEPSEEK_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
-    payload = _post_chat(base, key, model, messages, temperature=0.2)
+    limit = _max_tokens()
+    payload = _post_chat(base, key, model, messages, temperature=0.2, max_tokens=limit)
+    if _finish_reason(payload) == "length":
+        logger.info("deepseek synthesize truncated; raising max_tokens")
+        payload = _post_chat(base, key, model, messages, temperature=0.2, max_tokens=min(limit * 2, 8192))
     logger.info("deepseek synthesize http=%s", payload.get("_http_status"))
     text = _message_text(payload).strip()
     if not text:
@@ -164,6 +175,7 @@ def _plan_input(context: Mapping[str, Any]) -> dict[str, Any]:
         "text": str(context.get("text") or ""),
         "brief_status": context.get("brief_status"),
         "scope": context.get("scope"),
+        "constraints": context.get("constraints") or "",
         "kb_name": context.get("kb_name") or "",
         "clarify": context.get("clarify") or "auto",
     }
@@ -234,12 +246,38 @@ def _channels(sources: Sequence[str]) -> list[str]:
     return ordered
 
 
-def _post_chat(base: str, api_key: str, model: str, messages: list[dict[str, str]], *, temperature: float) -> dict[str, Any]:
+def _max_tokens() -> int:
+    raw = (os.getenv("ASK_MAX_TOKENS") or "2048").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 2048
+    return min(max(value, 256), 8192)
+
+
+def _finish_reason(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        return str(choices[0].get("finish_reason") or "")
+    return ""
+
+
+def _post_chat(
+    base: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    temperature: float,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
     import httpx
 
     url = _chat_url(base)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json"}
-    body = {"model": model, "temperature": temperature, "messages": messages}
+    body: dict[str, Any] = {"model": model, "temperature": temperature, "messages": messages}
+    if max_tokens:
+        body["max_tokens"] = max_tokens
     try:
         with httpx.Client(timeout=_timeout(), follow_redirects=False) as client:
             response = client.post(url, json=body, headers=headers)

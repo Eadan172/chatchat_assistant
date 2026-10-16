@@ -7,6 +7,7 @@ export interface AskQuestion {
   text: string
   recommendation: string
   reason: string
+  options: string[]
 }
 
 export interface AskOrigin {
@@ -80,6 +81,19 @@ export function answerAction(draft: string): { action: 'accept' } | { action: 'e
   return { action: 'edit', value: text }
 }
 
+export function askRequestBody(message: string, kbName = ''): Record<string, unknown> {
+  const body: Record<string, unknown> = { message, mode: 'personal', clarify: 'auto' }
+  const named = kbName.trim()
+  if (named) body.kb_name = named
+  return body
+}
+
+export function canAcceptRecommendation(question: AskQuestion | null | undefined): boolean {
+  if (!question) return false
+  if (question.options.length > 0) return false
+  return Boolean(question.recommendation.trim())
+}
+
 export function originLabel(origin: AskOrigin): string {
   const badge = askSourceBadge(origin) || '来源'
   const name = origin.title || origin.filename || origin.external_id || '未命名'
@@ -136,11 +150,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 function asQuestion(value: unknown): AskQuestion | null {
   const row = asRecord(value)
   if (typeof row.id !== 'string' || typeof row.text !== 'string') return null
+  const options = Array.isArray(row.options) ? row.options.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : []
   return {
     id: row.id,
     text: row.text,
     recommendation: typeof row.recommendation === 'string' ? row.recommendation : '',
     reason: typeof row.reason === 'string' ? row.reason : '',
+    options,
   }
 }
 

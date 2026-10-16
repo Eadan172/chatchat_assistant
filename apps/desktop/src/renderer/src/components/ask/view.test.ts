@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { citationLabel } from '../chat/citations'
 import {
   answerAction,
+  askRequestBody,
   askSourceBadge,
+  canAcceptRecommendation,
   emptyAskView,
   originLabel,
   reduceAskEvent,
@@ -27,6 +29,8 @@ describe('ask view', () => {
     })
     expect(state.phase).toBe('clarify')
     expect(state.question?.id).toBe('goal')
+    expect(state.question?.options).toEqual([])
+    expect(canAcceptRecommendation(state.question)).toBe(true)
     expect(answerAction('')).toEqual({ action: 'accept' })
     expect(answerAction('只要定义')).toEqual({ action: 'edit', value: '只要定义' })
 
@@ -41,6 +45,33 @@ describe('ask view', () => {
     expect(state.answer).toContain('两处来源说法不同')
     expect(state.notices).toEqual(['未配置联网搜索密钥。'])
     expect(searchedLabel(state.sources)).toBe('已搜索：本地库、ima 知识库、联网')
+  })
+
+  it('asks with clarify auto and does not accept a place option by default', () => {
+    expect(askRequestBody('去古北玩，附近美食排名')).toEqual({
+      message: '去古北玩，附近美食排名',
+      mode: 'personal',
+      clarify: 'auto',
+    })
+    expect(askRequestBody('附近美食', ' 吃喝 ')).toMatchObject({ clarify: 'auto', kb_name: '吃喝' })
+
+    let state = emptyAskView()
+    state = reduceAskEvent(state, {
+      event: 'clarify_question',
+      data: {
+        session_id: 8,
+        question: {
+          id: 'ambiguity-0',
+          text: '「古北」指的是哪一个？\n1. 北京密云古北水镇\n2. 上海长宁古北',
+          recommendation: '',
+          reason: '必须由你选定',
+          options: ['北京密云古北水镇', '上海长宁古北'],
+        },
+      },
+    })
+    expect(state.phase).toBe('clarify')
+    expect(state.question?.options).toEqual(['北京密云古北水镇', '上海长宁古北'])
+    expect(canAcceptRecommendation(state.question)).toBe(false)
   })
 
   it('badges web, ima, and local citations and lists every merged origin', () => {
