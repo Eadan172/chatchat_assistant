@@ -34,9 +34,9 @@ SERPAPI_KEY = "serpapi-m6-test-secret-value"
 TAVILY_KEY = "tavily-m6-test-secret-value"
 IMA_KEY = "ima-m6-test-secret-value"
 IMA_CLIENT = "ima-m6-client"
-LOCAL_TEXT = "第一性原理由亚里士多德提出于1980年，强调基本事实。"
-WEB_TEXT = "第一性原理提出于1990年，不是从基本事实出发。"
-NOTE_TEXT = "笔记本里提到第一性原理是一种思考方式。"
+LOCAL_TEXT = "示例概念由教材提出于1980年，强调基本事实。"
+WEB_TEXT = "示例概念提出于1990年，不是从基本事实出发。"
+NOTE_TEXT = "示例概念是一种思考方式。"
 
 
 class MockState:
@@ -56,7 +56,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path.endswith("/article"):
             self._record("GET", parsed.path, None)
-            paragraph = "第一性原理的页面正文提到亚里士多德与基本事实，并展开了后续论证。" * 8
+            paragraph = "示例概念的页面正文提到教材与基本事实，并展开了后续论证。" * 8
             body = (
                 "<html><head><script>var leaked = 'do-not-keep';</script>"
                 "<style>p{color:red}</style></head><body><article><p>"
@@ -141,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "need_clarify": "yes",
                     "sources": ["web", "ima", "local"],
-                    "queries": ["第一性原理 定义"],
+                    "queries": ["示例概念 定义"],
                     "confidence": 0.81,
                 },
                 ensure_ascii=False,
@@ -213,8 +213,8 @@ class Handler(BaseHTTPRequestHandler):
                     "data": {
                         "info_list": [
                             {
-                                "kb_id": "kb-fp",
-                                "kb_name": "第一性原理",
+                                "kb_id": "kb-demo",
+                                "kb_name": "示例概念",
                                 "description": "原理库",
                             }
                         ]
@@ -223,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         if path.endswith("/search_knowledge"):
-            if body.get("knowledge_base_id") != "kb-fp":
+            if body.get("knowledge_base_id") != "kb-demo":
                 self._json({"code": 220004, "msg": "invalid knowledge_base_id", "data": {}}, status=200)
                 return
             self._json(
@@ -254,11 +254,11 @@ class Handler(BaseHTTPRequestHandler):
                             {
                                 "note_book_info": {
                                     "note_id": "note-1",
-                                    "title": "原理笔记",
+                                    "title": "示例笔记",
                                     "summary": "摘要",
                                 },
                                 "highlightInfo": {
-                                    "doc_title": "原理笔记",
+                                    "doc_title": "示例笔记",
                                     "highlight_content": NOTE_TEXT,
                                 },
                             }
@@ -369,7 +369,7 @@ def joined_delta(events: list[tuple[str, dict]]) -> str:
 
 def test_flag_off_keeps_ask_closed_and_stub_chain(client: TestClient, token: str) -> None:
     assert provider_order() == ["google", "fallback"]
-    denied = client.post("/ask", headers=headers(token), json={"message": "第一性原理"})
+    denied = client.post("/ask", headers=headers(token), json={"message": "示例概念"})
     assert denied.status_code == 501
     settings = client.get("/settings/ask", headers=headers(token))
     assert settings.status_code == 501
@@ -421,7 +421,7 @@ def test_url_rrf_conflict_and_citation_guard() -> None:
         return "因此以网页为准。[1][99]", 4, 5
 
     result = synthesize(
-        "第一性原理",
+        "示例概念",
         {
             "local": [{"title": "本地", "text": LOCAL_TEXT, "filename": "a.md", "freshness_state": "fresh"}],
             "web": [{"title": "网页", "url": "https://example.com/fp", "text": WEB_TEXT, "freshness_state": "unknown"}],
@@ -464,7 +464,7 @@ def test_web_fallback_and_missing_key(monkeypatch: pytest.MonkeyPatch, tmp_path,
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     for name in ("SERPER_API_KEY", "SERPAPI_API_KEY", "TAVILY_API_KEY"):
         monkeypatch.delenv(name, raising=False)
-    quiet = search_web("第一性原理")
+    quiet = search_web("示例概念")
     assert quiet.hits == []
     assert quiet.notice == NO_WEB_KEY
 
@@ -476,7 +476,7 @@ def test_web_fallback_and_missing_key(monkeypatch: pytest.MonkeyPatch, tmp_path,
     monkeypatch.setenv("TAVILY_BASE_URL", f"{mock_server}/tavily")
     STATE.serper_status = 500
     STATE.calls.clear()
-    found = search_web("第一性原理")
+    found = search_web("示例概念")
     assert found.provider == "serpapi"
     assert found.hits[0]["title"] == "必应结果"
     paths = [call["path"] for call in STATE.calls]
@@ -500,8 +500,8 @@ def test_note_and_knowledge_use_live_fields() -> None:
                 data = {
                     "search_note_infos": [
                         {
-                            "note_book_info": {"note_id": "note-1", "title": "原理笔记", "summary": "摘要"},
-                            "highlightInfo": {"highlight_content": NOTE_TEXT, "doc_title": "原理笔记"},
+                            "note_book_info": {"note_id": "note-1", "title": "示例笔记", "summary": "摘要"},
+                            "highlightInfo": {"highlight_content": NOTE_TEXT, "doc_title": "示例笔记"},
                         }
                     ]
                 }
@@ -520,11 +520,11 @@ def test_note_and_knowledge_use_live_fields() -> None:
             return ImaResult(http_status=200, code=0, msg="成功", data=data, path=path)
 
     stub = Stub()
-    found = search(stub, "第一性原理", knowledge_base_id="kb-fp")  # type: ignore[arg-type]
+    found = search(stub, "示例概念", knowledge_base_id="kb-demo")  # type: ignore[arg-type]
     note = next(hit for hit in found["hits"] if hit["kind"] == "note")
     media = next(hit for hit in found["hits"] if hit["kind"] == "media")
     assert note["id"] == "note-1"
-    assert note["title"] == "原理笔记"
+    assert note["title"] == "示例笔记"
     assert NOTE_TEXT in note["snippet"]
     assert media["id"] == "media-1"
     assert media["parent_folder_id"] == "folder-1"
@@ -532,11 +532,11 @@ def test_note_and_knowledge_use_live_fields() -> None:
     assert media["snippet"] == LOCAL_TEXT
     folders, files = _split_knowledge(
         [{"media_id": "media-1", "title": "原理条目", "parent_folder_id": "folder-1", "media_type": 13}],
-        "kb-fp",
+        "kb-demo",
     )
     assert folders == []
     assert files[0]["kind"] == "media"
-    assert stub.sent[1] == (PATH_SEARCH_KNOWLEDGE, {"query": "第一性原理", "cursor": "", "knowledge_base_id": "kb-fp"})
+    assert stub.sent[1] == (PATH_SEARCH_KNOWLEDGE, {"query": "示例概念", "cursor": "", "knowledge_base_id": "kb-demo"})
 
 
 def test_missing_deepseek_falls_back_to_rules(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -547,7 +547,7 @@ def test_missing_deepseek_falls_back_to_rules(monkeypatch: pytest.MonkeyPatch, t
     assert isinstance(build_decision_client("rule"), RuleBasedDecisionClient)
     from app.ask.pipeline import decide
 
-    plan = decide("第一性原理", brief=None, kb_name="第一性原理", clarify="auto")
+    plan = decide("示例概念", brief=None, kb_name="示例概念", clarify="auto")
     assert plan.backend == "rule"
     assert plan.need_clarify == "yes"
     assert "ima" in plan.sources
@@ -605,7 +605,7 @@ def test_first_principles_from_clarify_to_cited_answer(
         "/library/import",
         headers=headers(token),
         json={
-            "filename": "first-principles.md",
+            "filename": "sample-concept.md",
             "content_base64": base64.b64encode(LOCAL_TEXT.encode("utf-8")).decode("ascii"),
         },
     )
@@ -614,13 +614,13 @@ def test_first_principles_from_clarify_to_cited_answer(
     opened = client.post(
         "/ask",
         headers=headers(token),
-        json={"message": "第一性原理", "kb_name": "第一性原理"},
+        json={"message": "示例概念", "kb_name": "示例概念"},
     )
     assert opened.status_code == 200, opened.text
     first = parse_sse(opened.text)
     clarify = next(payload for name, payload in first if name == "clarify_question")
     assert clarify["question"]["id"] == "goal"
-    assert "第一性原理" in clarify["question"]["text"]
+    assert "示例概念" in clarify["question"]["text"]
     assert not any(name == "citation" for name, _payload in first)
     session_id = clarify["session_id"]
     question_id = "goal"
@@ -630,8 +630,8 @@ def test_first_principles_from_clarify_to_cited_answer(
             "/ask",
             headers=headers(token),
             json={
-                "message": "第一性原理",
-                "kb_name": "第一性原理",
+                "message": "示例概念",
+                "kb_name": "示例概念",
                 "session_id": session_id,
                 "answers": [{"question_id": question_id, "action": "accept"}],
             },
@@ -647,7 +647,7 @@ def test_first_principles_from_clarify_to_cited_answer(
 
     searching = next(payload for name, payload in events if name == "searching")
     assert set(searching["sources"]) == {"local", "ima", "web"}
-    assert "第一性原理 定义" in searching["queries"]
+    assert "示例概念 定义" in searching["queries"]
     answer = joined_delta(events)
     assert CONFLICT_PHRASE in answer
     assert "以网页为准" not in answer
@@ -675,7 +675,7 @@ def test_first_principles_from_clarify_to_cited_answer(
     assert any(origin.get("external_id") == "media-1" for item in citations for origin in item["origins"])
     assert any(origin.get("external_id") == "note-1" for item in citations for origin in item["origins"])
     knowledge = next(call for call in STATE.calls if call["path"].endswith("/search_knowledge"))
-    assert knowledge["body"]["knowledge_base_id"] == "kb-fp"
+    assert knowledge["body"]["knowledge_base_id"] == "kb-demo"
     synthesis = next(
         call
         for call in STATE.calls
@@ -705,7 +705,7 @@ def test_grouped_answer_when_deepseek_is_down(
     monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
     monkeypatch.setenv("DEEPSEEK_BASE_URL", f"{mock_server}/deepseek")
     STATE.deepseek_status = 500
-    opened = client.post("/ask", headers=headers(token), json={"message": "第一性原理", "clarify": "auto"})
+    opened = client.post("/ask", headers=headers(token), json={"message": "示例概念", "clarify": "auto"})
     assert opened.status_code == 200, opened.text
     events = parse_sse(opened.text)
     assert any(name == "clarify_question" for name, _payload in events)
@@ -714,7 +714,7 @@ def test_grouped_answer_when_deepseek_is_down(
     clear = client.post(
         "/ask",
         headers=headers(token),
-        json={"message": "请在网上把第一性原理的定义说清楚，范围只要这个概念本身？", "clarify": "auto"},
+        json={"message": "请在网上把示例概念的定义说清楚，范围只要这个概念本身？", "clarify": "auto"},
     )
     assert clear.status_code == 200, clear.text
     body = joined_delta(parse_sse(clear.text))
@@ -725,7 +725,7 @@ GUIDE_TITLE = "ima笔记使用指南"
 GUIDE_TEXT = "打开 ima 后点击新建笔记即可完成记录。"
 SUBSCRIPTION_TITLE = "订阅库量子周报"
 SNIPPET = "短摘要。"
-LONG_PAGE = "第一性原理的页面正文提到亚里士多德与基本事实，并展开了后续论证。" * 8
+LONG_PAGE = "示例概念的页面正文提到教材与基本事实，并展开了后续论证。" * 8
 
 
 def test_title_only_subscription_is_related_not_evidence() -> None:
@@ -733,7 +733,7 @@ def test_title_only_subscription_is_related_not_evidence() -> None:
 
     def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
         captured["prompt"] = messages[-1]["content"]
-        return "第一性原理是一种思考方式。[1]\n有内容以订阅库量子周报为题。\n只有标题，没有正文。", 3, 4
+        return "示例概念是一种思考方式。[1]\n有内容以订阅库量子周报为题。\n只有标题，没有正文。", 3, 4
 
     groups = {
         "ima": [
@@ -746,14 +746,14 @@ def test_title_only_subscription_is_related_not_evidence() -> None:
                 "external_id": "sub-1",
             },
             {
-                "title": "第一性原理入门",
+                "title": "示例概念入门",
                 "text": "",
                 "ima_kind": "note",
                 "source": "ima",
                 "external_id": "title-note",
             },
             {
-                "title": "原理笔记",
+                "title": "示例笔记",
                 "text": NOTE_TEXT,
                 "ima_kind": "note",
                 "source": "ima",
@@ -768,11 +768,11 @@ def test_title_only_subscription_is_related_not_evidence() -> None:
             },
         ]
     }
-    result = synthesize("第一性原理", groups, complete=complete)
+    result = synthesize("示例概念", groups, complete=complete)
     head, _, tail = result.text.partition("相关条目")
     assert tail
     assert SUBSCRIPTION_TITLE in tail
-    assert "第一性原理入门" in tail
+    assert "示例概念入门" in tail
     assert SUBSCRIPTION_TITLE not in head
     assert "有内容以" not in result.text
     assert "只有标题" not in result.text
@@ -780,12 +780,12 @@ def test_title_only_subscription_is_related_not_evidence() -> None:
     assert "[1]" in head
     assert "订阅库量子周报" not in captured["prompt"]
     assert GUIDE_TITLE not in captured["prompt"]
-    assert "第一性原理入门" not in captured["prompt"]
+    assert "示例概念入门" not in captured["prompt"]
     assert NOTE_TEXT[:8] in captured["prompt"]
-    assert [item["title"] for item in result.citations] == ["原理笔记"]
+    assert [item["title"] for item in result.citations] == ["示例笔记"]
     assert result.citations[0]["n"] == 1
 
-    offline = synthesize("第一性原理", groups, missing_key=True)
+    offline = synthesize("示例概念", groups, missing_key=True)
     offline_head, _, offline_tail = offline.text.partition("相关条目")
     assert SUBSCRIPTION_TITLE in offline_tail
     assert SUBSCRIPTION_TITLE not in offline_head
@@ -806,7 +806,7 @@ def test_citations_keep_only_used_numbers_and_drop_unrelated_notes() -> None:
         return "丙的正文足够用来区分第三条。[3]\n甲的正文足够用来区分第一条。[1]\n编造。[99]", 2, 2
 
     result = synthesize(
-        "第一性原理",
+        "示例概念",
         {
             "web": [
                 {"title": "甲", "url": "https://example.com/a", "text": "甲的正文足够用来区分第一条。", "position": 1, "source": "web"},
@@ -841,7 +841,7 @@ def test_fetched_page_body_is_longer_than_snippet(mock_server: str) -> None:
     from app.web_search.page import enrich_web_hits, fetch_page_text
 
     page = fetch_page_text(f"{mock_server}/article")
-    assert "第一性原理的页面正文" in page
+    assert "示例概念的页面正文" in page
     assert len(page) > len(SNIPPET) + 200
     assert "do-not-keep" not in page
     assert "color:red" not in page
@@ -856,7 +856,7 @@ def test_fetched_page_body_is_longer_than_snippet(mock_server: str) -> None:
             return excerpt, 1, 1
 
         result = synthesize(
-            "第一性原理",
+            "示例概念",
             {"web": [{"title": "甲", "url": "https://example.com/a", "text": text, "source": "web"}]},
             complete=complete,
         )
@@ -894,10 +894,10 @@ def test_fetched_page_body_is_longer_than_snippet(mock_server: str) -> None:
     assert kept[0]["text"] == SNIPPET
 
     def complete_bad(messages: list[dict[str, str]]) -> tuple[str, int, int]:
-        return "第一性原理的页面正文提到亚里士多德与基本事实。[1][8]", 1, 1
+        return "示例概念的页面正文提到教材与基本事实。[1][8]", 1, 1
 
     guarded = synthesize(
-        "第一性原理",
+        "示例概念",
         {"web": [{"title": "甲", "url": "https://example.com/a", "text": enriched[0]["text"], "source": "web"}]},
         complete=complete_bad,
     )
@@ -925,7 +925,7 @@ def test_serper_failure_notice_names_provider(
     STATE.serper_status = 500
     STATE.calls.clear()
     caplog.set_level(logging.INFO)
-    found = search_web("第一性原理")
+    found = search_web("示例概念")
     assert found.hits == []
     assert found.notice
     assert found.notice != NO_WEB_RESULT
@@ -951,7 +951,7 @@ def test_serper_failure_notice_names_provider(
     STATE.serpapi_status = 403
     STATE.tavily_status = 500
     STATE.calls.clear()
-    failed = search_web("第一性原理")
+    failed = search_web("示例概念")
     notice = failed.notice or ""
     assert "Serper" in notice and "401" in notice
     assert "SerpApi" in notice and "403" in notice
@@ -966,8 +966,8 @@ def test_vector_note_filter_drops_unrelated_guide(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setenv("ASK_NOTE_FILTER", "vector")
     monkeypatch.delenv("ASK_NOTE_RELEVANCE", raising=False)
-    assert note_is_relevant("第一性原理", "原理笔记", NOTE_TEXT)
-    assert not note_is_relevant("第一性原理", GUIDE_TITLE, GUIDE_TEXT)
+    assert note_is_relevant("示例概念", "示例笔记", NOTE_TEXT)
+    assert not note_is_relevant("示例概念", GUIDE_TITLE, GUIDE_TEXT)
 
 
 def test_ambiguous_entity_asks_named_candidates(
@@ -984,16 +984,16 @@ def test_ambiguous_entity_asks_named_candidates(
         {
             "need_clarify": "no",
             "sources": ["web"],
-            "queries": ["李娜 近况"],
+            "queries": ["某甲 近况"],
             "confidence": 0.4,
-            "ambiguities": [{"term": "李娜", "options": ["网球运动员李娜", "歌手李娜"]}],
+            "ambiguities": [{"term": "某甲", "options": ["作家某甲", "演员某甲"]}],
         }
     )
     assert person["need_clarify"] == "yes"
-    person_tree = build_tree("李娜近况", None, 3, ambiguities=person["ambiguities"])
+    person_tree = build_tree("某甲近况", None, 3, ambiguities=person["ambiguities"])
     person_text = person_tree.current().text
-    assert "网球运动员李娜" in person_text
-    assert "歌手李娜" in person_text
+    assert "作家某甲" in person_text
+    assert "演员某甲" in person_text
     assert "怎样才算成功" not in person_text
 
     def fake_post(base, api_key, model, messages, *, temperature):
@@ -1001,14 +1001,14 @@ def test_ambiguous_entity_asks_named_candidates(
         assert api_key == DEEPSEEK_KEY
         assert "ambiguities" in messages[0]["content"]
         user = json.loads(messages[-1]["content"])
-        assert "古北" in user["text"]
+        assert "某地" in user["text"]
         content = json.dumps(
             {
                 "need_clarify": "no",
                 "sources": ["web", "local"],
-                "queries": ["古北 附近 美食 排名"],
+                "queries": ["某地 附近 餐厅 推荐"],
                 "confidence": 0.82,
-                "ambiguities": [{"term": "古北", "options": ["北京密云古北水镇", "上海长宁古北"]}],
+                "ambiguities": [{"term": "某地", "options": ["某地商场", "某地公园"]}],
             },
             ensure_ascii=False,
         )
@@ -1017,24 +1017,24 @@ def test_ambiguous_entity_asks_named_candidates(
     monkeypatch.setenv("FEATURE_ASK", "1")
     monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
     monkeypatch.setattr("app.decision.deepseek._post_chat", fake_post)
-    plan = decide("去古北玩，附近美食排名", brief=None, kb_name="", clarify="auto")
+    plan = decide("某地附近的餐厅推荐", brief=None, kb_name="", clarify="auto")
     assert plan.backend == "deepseek"
     assert plan.need_clarify == "yes"
-    assert plan.ambiguities[0]["term"] == "古北"
+    assert plan.ambiguities[0]["term"] == "某地"
 
     opened = client.post(
         "/ask",
         headers=headers(token),
-        json={"message": "去古北玩，附近美食排名", "clarify": "auto"},
+        json={"message": "某地附近的餐厅推荐", "clarify": "auto"},
     )
     assert opened.status_code == 200, opened.text
     events = parse_sse(opened.text)
     question = next(payload for name, payload in events if name == "clarify_question")
     text = question["question"]["text"]
-    assert "北京密云古北水镇" in text
-    assert "上海长宁古北" in text
+    assert "某地商场" in text
+    assert "某地公园" in text
     assert question["question"]["recommendation"] == ""
-    assert question["question"]["options"] == ["北京密云古北水镇", "上海长宁古北"]
+    assert question["question"]["options"] == ["某地商场", "某地公园"]
     assert "怎样才算成功" not in text
     assert str(question["question"]["id"]).startswith("ambiguity-")
 
@@ -1042,16 +1042,16 @@ def test_ambiguous_entity_asks_named_candidates(
         "/ask",
         headers=headers(token),
         json={
-            "message": "去古北玩，附近美食排名",
+            "message": "某地附近的餐厅推荐",
             "session_id": question["session_id"],
-            "answers": [{"question_id": question["question"]["id"], "action": "edit", "value": "北京密云古北水镇"}],
+            "answers": [{"question_id": question["question"]["id"], "action": "edit", "value": "某地商场"}],
         },
     )
     assert step.status_code == 200, step.text
     follow = parse_sse(step.text)
     nxt = next(payload for name, payload in follow if name == "clarify_question")
     assert "想吃哪一类" in nxt["question"]["text"]
-    assert "日料" in nxt["question"]["options"]
+    assert "火锅" in nxt["question"]["options"]
     assert nxt["question"]["recommendation"] == ""
     assert "怎样才算成功" not in nxt["question"]["text"]
 
@@ -1059,9 +1059,9 @@ def test_ambiguous_entity_asks_named_candidates(
 def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
     from app.ask.synthesize import NO_LIVE_SCORE
 
-    listing = "大众点评美食榜：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅"
-    related = "古北附近有很多美食，适合周末去玩。"
-    scored = "大众点评美食榜：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅。评分 4.8、4.6、4.5。"
+    listing = "示例美食榜：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅"
+    related = "某地附近有很多餐厅，适合周末去。"
+    scored = "示例美食榜：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅。评分 4.8、4.6、4.5。"
     captured: dict[str, str] = {}
 
     def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
@@ -1069,10 +1069,10 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
         return "附近美食排名：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅。[1][2]", 1, 1
 
     result = synthesize(
-        "去古北玩，附近美食排名",
+        "某地附近的餐厅排名",
         {
             "web": [
-                {"title": "点评榜", "url": "https://example.com/list", "text": listing, "position": 1, "source": "web"},
+                {"title": "示例榜", "url": "https://example.com/list", "text": listing, "position": 1, "source": "web"},
                 {"title": "游记", "url": "https://example.com/note", "text": related, "position": 2, "source": "web"},
             ]
         },
@@ -1088,7 +1088,7 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
     assert NO_LIVE_SCORE in result.text
     assert "[2]" not in result.text
     assert result.text.index("甲餐厅") < result.text.index("乙餐厅") < result.text.index("丙餐厅")
-    assert [item["title"] for item in result.citations] == ["点评榜"]
+    assert [item["title"] for item in result.citations] == ["示例榜"]
     assert "https://" not in captured["system"]
 
     def reversed_list(messages: list[dict[str, str]]) -> tuple[str, int, int]:
@@ -1096,10 +1096,10 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
 
     reversed_result = synthesize(
         "附近美食排名",
-        {"web": [{"title": "点评榜", "url": "https://example.com/list", "text": listing, "source": "web"}]},
+        {"web": [{"title": "示例榜", "url": "https://example.com/list", "text": listing, "source": "web"}]},
         complete=reversed_list,
     )
-    assert "据《点评榜》榜单第1名" not in reversed_result.text
+    assert "据《示例榜》榜单第1名" not in reversed_result.text
     assert "第1名" not in reversed_result.text
     assert "没找到可引用的来源" in reversed_result.text
     assert reversed_result.citations == []
@@ -1110,20 +1110,20 @@ def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
 
     scored_result = synthesize(
         "美食 top",
-        {"web": [{"title": "点评榜", "url": "https://example.com/list", "text": scored, "source": "web"}]},
+        {"web": [{"title": "示例榜", "url": "https://example.com/list", "text": scored, "source": "web"}]},
         complete=with_scores,
     )
     assert "第N名" in captured["scored"]
     assert NO_LIVE_SCORE not in scored_result.text
-    assert [item["title"] for item in scored_result.citations] == ["点评榜"]
+    assert [item["title"] for item in scored_result.citations] == ["示例榜"]
 
     def plain(messages: list[dict[str, str]]) -> tuple[str, int, int]:
         captured["plain"] = messages[0]["content"]
-        return "第一性原理是一种思考方式。[1]", 1, 1
+        return "示例概念是一种思考方式。[1]", 1, 1
 
     synthesize(
-        "第一性原理",
-        {"ima": [{"title": "原理笔记", "text": NOTE_TEXT, "ima_kind": "note", "source": "ima"}]},
+        "示例概念",
+        {"ima": [{"title": "示例笔记", "text": NOTE_TEXT, "ima_kind": "note", "source": "ima"}]},
         complete=plain,
     )
     assert "来源未标名次" not in captured["plain"]
@@ -1144,7 +1144,7 @@ def test_clarified_local_life_routes_web_only(client: TestClient, token: str, mo
             payload = {
                 "need_clarify": "yes",
                 "sources": ["web", "ima", "local"],
-                "queries": ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"],
+                "queries": ["某地 餐厅 人均", "某地 餐厅 地铁站 步行", "某地 餐厅 口碑"],
                 "confidence": 0.7,
                 "ambiguities": [],
             }
@@ -1152,9 +1152,9 @@ def test_clarified_local_life_routes_web_only(client: TestClient, token: str, mo
             payload = {
                 "need_clarify": "no",
                 "sources": ["web", "ima", "local"],
-                "queries": ["古北 附近 美食"],
+                "queries": ["某地 附近 餐厅"],
                 "confidence": 0.8,
-                "ambiguities": [{"term": "古北", "options": ["北京密云古北水镇", "上海长宁古北"]}],
+                "ambiguities": [{"term": "某地", "options": ["某地商场", "某地公园"]}],
             }
         content = json.dumps(payload, ensure_ascii=False)
         return {"choices": [{"message": {"content": content}}], "usage": {}, "_http_status": 200}
@@ -1165,13 +1165,13 @@ def test_clarified_local_life_routes_web_only(client: TestClient, token: str, mo
     opened = client.post(
         "/ask",
         headers=headers(token),
-        json={"message": "去古北玩，附近美食排名", "clarify": "auto"},
+        json={"message": "某地附近的餐厅推荐", "clarify": "auto"},
     )
     assert opened.status_code == 200, opened.text
     choices = {
-        "ambiguity-0": "上海长宁古北",
-        "probe-cuisine": "日料",
-        "probe-basis": "大众点评评分",
+        "ambiguity-0": "某地公园",
+        "probe-cuisine": "火锅",
+        "probe-basis": "榜单名次",
         "probe-price": "价格亲民",
         "probe-metro": "离地铁站近",
     }
@@ -1185,7 +1185,7 @@ def test_clarified_local_life_routes_web_only(client: TestClient, token: str, mo
             "/ask",
             headers=headers(token),
             json={
-                "message": "去古北玩，附近美食排名",
+                "message": "某地附近的餐厅推荐",
                 "session_id": question["session_id"],
                 "answers": [{"question_id": qid, "action": "edit", "value": choices[qid]}],
             },
@@ -1196,14 +1196,14 @@ def test_clarified_local_life_routes_web_only(client: TestClient, token: str, mo
     assert searching["sources"] == ["web"]
     assert "ima" not in searching["sources"]
     assert "local" not in searching["sources"]
-    assert searching["queries"] == ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"]
+    assert searching["queries"] == ["某地 餐厅 人均", "某地 餐厅 地铁站 步行", "某地 餐厅 口碑"]
     assert not any("；" in item or "人均100-200" in item for item in searching["queries"])
     assert seen[-1]["brief_status"] == "clarified"
-    assert "上海长宁古北" in seen[-1]["text"]
-    assert "日料" in seen[-1]["constraints"]
-    assert "大众点评评分" in seen[-1]["constraints"]
+    assert "某地公园" in seen[-1]["text"]
+    assert "火锅" in seen[-1]["constraints"]
+    assert "榜单名次" in seen[-1]["constraints"]
 
-    plain = decide("第一性原理的定义是什么", brief=None, kb_name="", clarify="skip")
+    plain = decide("示例概念的定义是什么", brief=None, kb_name="", clarify="skip")
     assert plain.sources == ["local", "ima", "web"]
 
 
@@ -1212,22 +1212,22 @@ def test_jev_web_only_does_not_add_local_or_ima(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    food = decide("北京三里屯附近美食", brief=None, kb_name="", clarify="skip")
+    food = decide("某地附近美食", brief=None, kb_name="", clarify="skip")
     assert food.sources == ["web"]
-    assert life_web_only("去古北玩")
-    assert not life_web_only("第一性原理的笔记")
+    assert life_web_only("某地附近的餐厅")
+    assert not life_web_only("示例概念的笔记")
 
     def fake_post(base, api_key, model, messages, *, temperature):
         del base, api_key, model, messages, temperature
         content = json.dumps(
-            {"need_clarify": "no", "sources": ["web"], "queries": ["第一性原理 定义"], "confidence": 0.9, "ambiguities": []},
+            {"need_clarify": "no", "sources": ["web"], "queries": ["示例概念 定义"], "confidence": 0.9, "ambiguities": []},
             ensure_ascii=False,
         )
         return {"choices": [{"message": {"content": content}}], "usage": {}, "_http_status": 200}
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
     monkeypatch.setattr("app.decision.deepseek._post_chat", fake_post)
-    plan = decide("第一性原理的定义是什么", brief=None, kb_name="", clarify="skip")
+    plan = decide("示例概念的定义是什么", brief=None, kb_name="", clarify="skip")
     assert plan.sources == ["web"]
     assert plan.backend == "deepseek"
 
@@ -1246,8 +1246,8 @@ def test_rank_markers_budget_and_uncited_sentences() -> None:
 
     listed = "甲餐厅人均80 · 乙餐厅人均150 · 丙餐厅"
     result = synthesize(
-        "古北附近美食排名 人均100以内",
-        {"web": [{"title": "古北美食TOP", "url": "https://example.com/top", "text": listed, "source": "web"}]},
+        "某地附近餐厅排名 人均100以内",
+        {"web": [{"title": "附近美食榜", "url": "https://example.com/top", "text": listed, "source": "web"}]},
         complete=complete,
     )
     assert "据《" not in result.text
@@ -1269,10 +1269,10 @@ def test_rank_markers_budget_and_uncited_sentences() -> None:
 
     ranked_result = synthesize(
         "附近美食排名",
-        {"web": [{"title": "古北排行榜", "url": "https://example.com/r", "text": "TOP1 甲餐厅 TOP2 乙餐厅", "source": "web"}]},
+        {"web": [{"title": "示例排行榜", "url": "https://example.com/r", "text": "TOP1 甲餐厅 TOP2 乙餐厅", "source": "web"}]},
         complete=ranked,
     )
-    assert "据《古北排行榜》榜单第1名" not in ranked_result.text
+    assert "据《示例排行榜》榜单第1名" not in ranked_result.text
     assert "第1名是甲餐厅" in ranked_result.text
     assert "第2名是乙餐厅" in ranked_result.text
     assert ranked_result.text.index("第1名") < ranked_result.text.index("第2名")
@@ -1303,26 +1303,26 @@ def test_vague_food_query_clarifies_even_when_router_says_no(
 ) -> None:
     from app.clarifier.design_tree import clean_ambiguities, specified_food_query, vague_food_query
 
-    specific = "上海古北的大众点评打分最高的价格亲民、距离地铁站最近的的日料"
-    assert vague_food_query("去古北玩，附近美食排名")
+    specific = "某地餐厅里口碑打分最高的价格亲民、距离地铁站最近的火锅"
+    assert vague_food_query("某地附近的餐厅推荐")
     assert not vague_food_query(specific)
     assert specified_food_query(specific)
     assert clean_ambiguities(
         [
             {"term": "价格亲民", "options": ["便宜", "贵"]},
             {"term": "距离地铁站最近", "options": ["步行5分钟", "不限"]},
-            {"term": "古北", "options": ["北京密云古北水镇", "上海长宁古北"]},
+            {"term": "某地", "options": ["某地商场", "某地公园"]},
         ]
-    ) == [{"term": "古北", "options": ["北京密云古北水镇", "上海长宁古北"]}]
+    ) == [{"term": "某地", "options": ["某地商场", "某地公园"]}]
 
     def fake_post(base, api_key, model, messages, *, temperature):
         del base, api_key, model, temperature
         user = json.loads(messages[-1]["content"])
-        if "日料" in str(user.get("text") or ""):
+        if "火锅" in str(user.get("text") or ""):
             payload = {
                 "need_clarify": "yes",
                 "sources": ["web", "ima", "local"],
-                "queries": ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"],
+                "queries": ["某地 餐厅 人均", "某地 餐厅 地铁站 步行", "某地 餐厅 口碑"],
                 "confidence": 0.4,
                 "ambiguities": [
                     {"term": "价格亲民", "options": ["便宜", "贵"]},
@@ -1333,7 +1333,7 @@ def test_vague_food_query_clarifies_even_when_router_says_no(
             payload = {
                 "need_clarify": "no",
                 "sources": ["web", "ima", "local"],
-                "queries": ["古北 附近 美食"],
+                "queries": ["某地 附近 餐厅"],
                 "confidence": 0.9,
                 "ambiguities": [],
             }
@@ -1346,20 +1346,20 @@ def test_vague_food_query_clarifies_even_when_router_says_no(
     opened = client.post(
         "/ask",
         headers=headers(token),
-        json={"message": "去古北玩，附近美食排名", "clarify": "auto"},
+        json={"message": "某地附近的餐厅推荐", "clarify": "auto"},
     )
     assert opened.status_code == 200, opened.text
     events = parse_sse(opened.text)
     question = next(payload for name, payload in events if name == "clarify_question")
     assert question["question"]["id"] == "probe-place"
     assert question["question"]["recommendation"] == ""
-    assert "北京密云" not in question["question"]["text"]
-    assert "上海长宁" not in question["question"]["text"]
+    assert "请写清楚" in question["question"]["text"]
+    assert "options" not in question["question"]
     refused = client.post(
         "/ask",
         headers=headers(token),
         json={
-            "message": "去古北玩，附近美食排名",
+            "message": "某地附近的餐厅推荐",
             "session_id": question["session_id"],
             "answers": [{"question_id": "probe-place", "action": "accept"}],
         },
@@ -1375,7 +1375,7 @@ def test_vague_food_query_clarifies_even_when_router_says_no(
     assert not any(name == "clarify_question" for name, _payload in specific_events)
     searching = next(payload for name, payload in specific_events if name == "searching")
     assert searching["sources"] == ["web"]
-    assert searching["queries"] == ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"]
+    assert searching["queries"] == ["某地 餐厅 人均", "某地 餐厅 地铁站 步行", "某地 餐厅 口碑"]
 
 
 def test_dianping_scores_and_metro_distance_stay_inside_sources() -> None:
@@ -1385,16 +1385,16 @@ def test_dianping_scores_and_metro_distance_stay_inside_sources() -> None:
         system = messages[0]["content"]
         assert "评分以大众点评 App 为准" in system
         assert "不要调用地图" in system
-        return "甲餐厅大众点评 4.9 分。[1]\n距娄山关路站步行8分钟。[1]", 1, 1
+        return "甲餐厅 4.9 分。[1]\n距某地铁站步行8分钟。[1]", 1, 1
 
     cited = synthesize(
-        "上海古北 大众点评打分 离地铁站近的日料",
+        "某地餐厅打分最高而且离地铁站近",
         {
             "web": [
                 {
-                    "title": "古北游记",
+                    "title": "附近游记",
                     "url": "https://example.com/a",
-                    "text": "甲餐厅在古北，距娄山关路站步行8分钟。",
+                    "text": "甲餐厅在某地，距某地铁站步行8分钟。",
                     "source": "web",
                 }
             ]
@@ -1403,7 +1403,7 @@ def test_dianping_scores_and_metro_distance_stay_inside_sources() -> None:
     )
     assert "4.9" not in cited.text
     assert "步行3" not in cited.text
-    assert "距娄山关路站步行8分钟" in cited.text
+    assert "距某地铁站步行8分钟" in cited.text
     assert "[1]" in cited.text
     assert cited.text.count(DIANPING_NOTICE) == 1
     assert DISTANCE_GAP not in cited.text
@@ -1412,7 +1412,7 @@ def test_dianping_scores_and_metro_distance_stay_inside_sources() -> None:
         return "乙餐厅评分 4.8 分。[1]", 1, 1
 
     missing = synthesize(
-        "大众点评打分最高而且离地铁近",
+        "打分最高而且离地铁近",
         {"web": [{"title": "笔记", "url": "https://example.com/b", "text": "乙餐厅在商场里。", "source": "web"}]},
         complete=bare,
     )
@@ -1443,7 +1443,7 @@ def test_quoted_period_stays_attached_to_its_citation() -> None:
         return "推荐「甲餐厅。口味稳定。」[1]\n步行到店即可。[1]", 1, 1
 
     result = synthesize(
-        "日料",
+        "火锅",
         {"web": [{"title": "文", "url": "https://example.com/q", "text": "甲餐厅。口味稳定。步行到店即可。", "source": "web"}]},
         complete=complete,
     )
@@ -1456,7 +1456,7 @@ def test_rank_claim_without_verbatim_marker_is_dropped() -> None:
     def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
         return "第1名是甲餐厅。[1]", 1, 1
 
-    excerpt = "甲餐厅电话021-55551234，人均¥368，2018年开业。"
+    excerpt = "甲餐厅人均¥368，2018年开业。"
     result = synthesize(
         "附近美食排名",
         {"web": [{"title": "旧文", "url": "https://example.com/old", "text": excerpt, "source": "web"}]},
@@ -1476,7 +1476,7 @@ def test_affordable_price_states_the_assumption_without_pasting_the_page() -> No
         return "甲餐厅人均80。\n[1]", 1, 1
 
     result = synthesize(
-        "上海古北 价格亲民 日料",
+        "某地 价格亲民 火锅",
         {
             "web": [
                 {
@@ -1525,13 +1525,13 @@ def test_web_search_merges_each_short_query(monkeypatch: pytest.MonkeyPatch) -> 
         if "site:" in query:
             return WebSearchResult(hits=[])
         pages = {
-            "上海古北 日料 人均": "https://example.com/a",
-            "古北 日料 地铁站 步行": "https://example.com/b",
-            "古北 日料 大众点评": "https://example.com/a?utm_source=ad#top",
+            "某地 餐厅 人均": "https://example.com/a",
+            "某地 餐厅 地铁站 步行": "https://example.com/b",
+            "某地 餐厅 口碑": "https://example.com/a?utm_source=ad#top",
         }
-        notice = NO_WEB_RESULT if query.endswith("大众点评") else None
+        notice = NO_WEB_RESULT if query.endswith("口碑") else None
         return WebSearchResult(
-            hits=[{"title": query, "url": pages[query], "text": "日料 甲餐厅", "position": 9}],
+            hits=[{"title": query, "url": pages[query], "text": "甲餐厅", "position": 9}],
             notice=notice,
         )
 
@@ -1542,7 +1542,7 @@ def test_web_search_merges_each_short_query(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr("app.ask.pipeline.search_web", fake_search)
     monkeypatch.setattr("app.ask.pipeline.enrich_web_hits", fake_enrich)
     groups, notices = _retrieve(
-        ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"],
+        ["某地 餐厅 人均", "某地 餐厅 地铁站 步行", "某地 餐厅 口碑"],
         ["web"],
         kb_name="",
         brief=None,
@@ -1551,7 +1551,7 @@ def test_web_search_merges_each_short_query(monkeypatch: pytest.MonkeyPatch) -> 
         registry=None,
     )
     expected_calls: list[str] = []
-    for query in ["上海古北 日料 人均", "古北 日料 地铁站 步行", "古北 日料 大众点评"]:
+    for query in ["某地 餐厅 人均", "某地 餐厅 地铁站 步行", "某地 餐厅 口碑"]:
         expected_calls.extend([query, f"{query} site:dianping.com", f"{query} site:xiaohongshu.com"])
     assert calls == expected_calls
     assert [item["url"] for item in groups["web"]] == ["https://example.com/a", "https://example.com/b"]
@@ -1563,8 +1563,8 @@ def test_uncited_model_text_is_replaced() -> None:
         return "这家店很好但是没有编号。", 1, 1
 
     result = synthesize(
-        "日料推荐",
-        {"web": [{"title": "文", "url": "https://example.com/z", "text": "甲餐厅在古北。", "source": "web"}]},
+        "火锅推荐",
+        {"web": [{"title": "文", "url": "https://example.com/z", "text": "甲餐厅在某地。", "source": "web"}]},
         complete=complete,
     )
     assert result.text == "没找到可引用的来源"
@@ -1613,8 +1613,8 @@ def test_fixed_notes_are_emitted_once() -> None:
         ), 1, 1
 
     result = synthesize(
-        "价格亲民 大众点评 日料",
-        {"web": [{"title": "菜单", "url": "https://example.com/m", "text": "日料 甲餐厅人均80。", "source": "web"}]},
+        "价格亲民 打分 火锅",
+        {"web": [{"title": "菜单", "url": "https://example.com/m", "text": "甲餐厅人均80。", "source": "web"}]},
         complete=complete,
     )
     assert result.text.count("按人均150元以内筛选") == 1
@@ -1631,20 +1631,20 @@ def test_staleness_uses_one_date_and_drops_notes_that_are_the_only_citation() ->
 
     def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
         return (
-            "甲餐厅是日料。[1]\n"
+            "甲餐厅是火锅。[1]\n"
             "《2018年旧文》为2013年资料，可能已过时。[1]\n"
             "《2018年旧文》为2018年资料，可能已过时。[1]\n"
             "《旁支》为2018年资料，可能已过时。[2]"
         ), 1, 1
 
     result = synthesize(
-        "日料推荐",
+        "火锅推荐",
         {
             "web": [
                 {
                     "title": "2018年旧文",
                     "url": "https://example.com/a",
-                    "text": "甲餐厅是日料。文中也提到2013年。",
+                    "text": "甲餐厅是火锅。文中也提到2013年。",
                     "source": "web",
                 },
                 {
@@ -1685,11 +1685,11 @@ def test_cuisine_filter_drops_other_food_and_adds_site_queries(monkeypatch: pyte
 
     def fake_search(query: str, limit: int = 5) -> WebSearchResult:
         calls.append((query, limit))
-        if "site:" in query or query == "第一性原理 定义":
+        if "site:" in query or query == "示例概念 定义":
             return WebSearchResult(hits=[])
         return WebSearchResult(
             hits=[
-                {"title": "寿司店", "url": "https://example.com/sushi", "text": "这家是日料寿司"},
+                {"title": "火锅店", "url": "https://example.com/hotpot", "text": "这家是火锅"},
                 {"title": "咖喱店", "url": "https://example.com/curry", "text": "咖喱饭很好吃"},
             ]
         )
@@ -1701,32 +1701,32 @@ def test_cuisine_filter_drops_other_food_and_adds_site_queries(monkeypatch: pyte
     monkeypatch.setattr("app.ask.pipeline.search_web", fake_search)
     monkeypatch.setattr("app.ask.pipeline.enrich_web_hits", fake_enrich)
     groups, _notices = _retrieve(
-        ["上海古北 日料 人均", "古北 日料 地铁站 步行"],
+        ["某地 餐厅 人均", "某地 餐厅 地铁站 步行"],
         ["web"],
         kb_name="",
         brief=None,
         mode="personal",
         verify="auto",
         registry=None,
-        context="上海古北 日料",
+        context="某地 火锅",
     )
-    assert [item["title"] for item in groups["web"]] == ["寿司店"]
+    assert [item["title"] for item in groups["web"]] == ["火锅店"]
     assert all(limit == 20 for _query, limit in calls)
-    assert "上海古北 日料 人均 site:dianping.com" in [query for query, _limit in calls]
-    assert "古北 日料 地铁站 步行 site:xiaohongshu.com" in [query for query, _limit in calls]
+    assert "某地 餐厅 人均 site:dianping.com" in [query for query, _limit in calls]
+    assert "某地 餐厅 地铁站 步行 site:xiaohongshu.com" in [query for query, _limit in calls]
 
     calls.clear()
     _retrieve(
-        ["第一性原理 定义"],
+        ["示例概念 定义"],
         ["web"],
         kb_name="",
         brief=None,
         mode="personal",
         verify="auto",
         registry=None,
-        context="第一性原理 定义",
+        context="示例概念 定义",
     )
-    assert calls == [("第一性原理 定义", 20)]
+    assert calls == [("示例概念 定义", 20)]
 
 
 def test_serper_requests_twenty_results(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -1744,8 +1744,8 @@ def test_serper_requests_twenty_results(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setattr("app.web_search.live._post_json", fake_post)
     from app.web_search.live import SerperProvider
 
-    SerperProvider().fetch("古北 日料", limit=20)
-    assert captured["body"] == {"q": "古北 日料", "num": 20}
+    SerperProvider().fetch("某地 餐厅", limit=20)
+    assert captured["body"] == {"q": "某地 餐厅", "num": 20}
 
     seen: dict = {}
 
@@ -1755,7 +1755,7 @@ def test_serper_requests_twenty_results(monkeypatch: pytest.MonkeyPatch, tmp_pat
         return [], 200
 
     monkeypatch.setattr("app.web_search.live.SerperProvider.fetch", fake_fetch)
-    found = search_web("日料", limit=20)
+    found = search_web("餐厅", limit=20)
     assert seen["limit"] == 20
     assert found.hits == []
 

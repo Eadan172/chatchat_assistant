@@ -12,7 +12,7 @@ A missing key prints ``<name> skipped no_key`` and is not called.
 Exit 2 when none of the four keys are set, 1 when a configured call fails,
 0 otherwise.
 
-Optional: ASK_SMOKE_QUERY (default 第一性原理).
+Optional: ASK_SMOKE_QUERY (default 示例概念).
 """
 
 from __future__ import annotations
@@ -165,7 +165,7 @@ def main() -> int:
     install_redaction()
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    query = (os.getenv("ASK_SMOKE_QUERY") or "第一性原理").strip() or "第一性原理"
+    query = (os.getenv("ASK_SMOKE_QUERY") or "示例概念").strip() or "示例概念"
     names = ("serper", "serpapi", "tavily", "deepseek")
     configured = [name for name in names if secret_value(name)]
     failed = False

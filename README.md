@@ -1,216 +1,172 @@
-# 知识引擎（M5 ima 连接器）
+# 知识引擎
 
-Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode. M3 imports local files, indexes them, and answers from those chunks. M4 checks those files for freshness with a content hash and source mtime. M5 adds a Tencent ima connector (official OpenAPI only) that can list knowledge bases, search, and import selected notes or files into that same library.
+这是一个装在你自己电脑上的问答程序。你可以把笔记放进本地库，也可以打开「提问」：程序会先把没说清的地方问完，再从本地笔记、ima 知识库和网上资料里找依据，并在回答里标出每句话的来源。
 
-Import md, txt, pdf, or docx. Each file is chunked and written to SQLite FTS5 plus a vector index (sqlite-vec when the extension loads, otherwise a blob of the same vectors). `POST /chat` streams `citation`, `delta`, and `done` over SSE. Citations name the source file and chunk. If the library has documents but nothing matches, the answer is `当前知识库中没有找到相关内容。` and no citation is emitted. An empty library still returns the M0 stub, so older chat tests stay valid.
+日常使用看这一页。接口、测试和目录说明在 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
-Shadow decisions are unchanged: every `/chat` still logs intent and channel probes, `applied` stays false while real routing is off, and the decider does not switch retrieval channels. A confirmed brief's `scope` filters hits and is repeated in the answer. `personal` mode does not return `web` or `connector` rows.
+## 你需要准备
 
-Chat and embeddings are OpenAI-compatible. Set `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` (or `EMBED_BASE_URL`, `EMBED_API_KEY`, `EMBED_MODEL`). With no key, indexing uses a deterministic hashing embedder and answers are extractive. That offline path is what the tests and the desktop demo use.
+- Node.js 22
+- Python 3.11 或 3.12
+- 可选的密钥：DeepSeek（用来组织和写回答）、Serper（用来上网搜索）。没有搜索密钥时，仍可以导入本地文件并离线回答。要用 ima 知识库，还需要 ima 的 Client ID 和 API Key。
 
-The Jev client is still the rule backend. `register_decision_backend` is the seam for a later model endpoint; `build_decision_client("remote")` raises until one is registered. If that hook is filled in, point it at DeepSeek (`https://api.deepseek.com`, `deepseek-v4-flash`). Gemini and `api.openai.com` time out from mainland China, so they are not the example default. Web search is a chain of Google then `WEB_SEARCH_FALLBACK` (default `fallback`). Neither provider calls the network. M4 does not re-fetch the web; a `web` or `connector` row is marked `unknown`.
+密钥只放在你自己的电脑上。下面的示例都是占位文字，请换成你自己的，不要把真密钥写进仓库或发给别人。
 
-Local verify is off unless `FEATURE_VERIFY=1` (the desktop shell forwards `VITE_FEATURE_VERIFY`). While it is off, `POST /verify` and `GET /verify/{job_id}` stay 501 and chat does not re-read files. `needs_verify` is still only a shadow log. While it is on, `POST /verify` with `{"item_ids":[1],"mode":"hash_mtime"}` re-reads `source_path` when that file exists. A changed hash or a newer mtime sets `freshness_state` to `stale` and `prompt_update` to true. The body is left alone until `mode` is `refetch`, which re-ingests and reindexes. A missing or unreadable path sets `unknown` and is never left as `fresh`. The same check runs inside `/chat` when the question hits a freshness cue (`最新`, `现在`, `当前`, and the words already used by the rule client) or when `"verify":"force"`. `"verify":"skip"` still answers and adds a short 未查证 note. Repeated checks inside `VERIFY_DEBOUNCE_S` (default 30) skip the full re-read when the mtime has not moved. Embedding downloads, if you set `EMBED_PROVIDER=bge`, use `HF_ENDPOINT=https://hf-mirror.com` unless you already set one. `huggingface.co` is not the primary.
+## 安装
 
-Offline retrieval baseline, recorded here rather than treated as a production score: on the five-question fixture in `services/sidecar/tests/test_m3_library.py`, top-1 citation accuracy is 5/5 (1.0) with the hashing embedder.
+在仓库根目录打开终端。
 
-## Layout
+安装桌面程序：
 
+```bash
+npm install
 ```
-apps/desktop/          Electron + React + TypeScript (electron-vite)
-services/sidecar/      Python FastAPI sidecar
-vendor/MediaCrawler/   placeholder only — not cloned
-```
 
-## Sidecar health check
-
-Python 3.11 or 3.12. From a clean checkout:
+安装后台（问答、导入、搜索都由它完成）：
 
 ```bash
 cd services/sidecar
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
+source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -r requirements-core.txt
 ```
 
-`requirements-core.txt` is enough to boot the sidecar, including `pypdf` and `sqlite-vec`. `requirements.txt` also lists torch, FlagEmbedding, and transformers. Those libraries are not imported when the process starts. Set `EMBED_PROVIDER=bge` only when you intend to load them.
+Windows PowerShell：
 
-```bash
-export SIDECAR_TOKEN=devtoken
-export DATA_DIR="$PWD/../../.data"   # any writable directory
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+```powershell
+cd services\sidecar
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -r requirements-core.txt
 ```
 
-In another shell:
+`requirements-core.txt` 足够启动。只有在你明确要使用 `EMBED_PROVIDER=bge` 时，才需要再安装带 torch 的 `requirements.txt`。
+
+## 启动
+
+回到仓库根目录。下面这一条会打开窗口，并自动启动后台。`VITE_FEATURE_ASK` 打开窗口里的提问；程序会把它传给后台。
+
+macOS 或 Linux：
 
 ```bash
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/health
-```
-
-Expected:
-
-```json
-{"ok":true,"version":"0.1.0","data_dir":"...","db":"ready","models":{"embedder":"not_loaded","reranker":"not_loaded"}}
-```
-
-When `SIDECAR_TOKEN` is set, every route — including `/health` — requires the header `x-sidecar-token`. A missing or wrong token returns `401`.
-
-Import a file and ask about it (offline extractive answer, no API key):
-
-```bash
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{"filename":"qingjiao-notes.md","text":"每斤青椒放盐三克。腌制时间是两小时。"}' \
-  http://127.0.0.1:8765/library/import
-
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/library/items
-
-curl -N -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{"mode":"personal","message":"青椒腌制要多久","sources":["local"]}' \
-  http://127.0.0.1:8765/chat
-```
-
-You should see `event: citation` (filename and chunk), then `event: delta`, then `event: done` with `"provider":"offline"`. A question the file does not cover returns the not-found sentence and no citation. `POST /search` returns the same hits without generating. `POST /index/rebuild` with `{"scope":"pending"}` or `{"scope":"all"}` reindexes. `DELETE /library/items/{id}` removes the row, chunks, FTS rows, and vectors.
-
-One-shot sample import without curl, from the repo root:
-
-```bash
-cd services/sidecar
-export DATA_DIR="$PWD/../../.data"
-.venv/bin/python scripts/import_sample.py
-```
-
-The sample is `samples/m3/qingjiao-notes.md`.
-
-Chat with no indexed chunks is still the M0 stub (decision events, one delta, one done). Trivial empty chat:
-
-```bash
-curl -N -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{"mode":"personal","messages":[{"role":"user","content":"hi"}]}' \
-  http://127.0.0.1:8765/chat
-```
-
-You should see one or more `event: decision` lines, then `event: delta`, then `event: done`. An empty body still returns the same stub delta and done payload as M1 when the library has no chunks. Pass `brief_id` after confirming a clarification, or `"clarify": "skip"`, and the `done` event includes the brief. Real routing is off by default, so a decision that would have picked `web` does not change `retrieval.sources`.
-
-Shadow logs (developer). Each `/chat` writes `decision_log` rows for `intent`, `need_clarify`, `route_channels`, `needs_verify`, and `relevance`. Nothing in those rows should contain an API key or the sidecar token.
-
-```bash
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" \
-  "http://127.0.0.1:8765/decision/logs?limit=20&offset=0"
-```
-
-The response is `{ "items", "limit", "offset", "total" }`. `items` are newest first. Toggle shadow mode (default on) or turn real routing on (default off):
-
-```bash
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{"enabled":true}' \
-  http://127.0.0.1:8765/decision/shadow
-
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/settings/decision
-
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{"shadow":true,"real_routing":false}' \
-  http://127.0.0.1:8765/settings/decision
-```
-
-Settings live in `$DATA_DIR/config/decision.json`. With shadow on, or with real routing off, `applied` stays false and the chat text does not change. If the placeholder raises, the row is stored with `fallback` `llm` or `default` and `/chat` still returns delta and done. There is no built-in production confidence cutoff; set `confidence_floor` only when you want one. Marking a row `applied` does not switch retrieval, clarification, or verification in this milestone.
-
-Clarify one question at a time:
-
-```bash
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{"keyword":"考研数学复盘怎么做","domain_hint":"learning"}' \
-  http://127.0.0.1:8765/clarify/start
-```
-
-Answer with `action` `accept`, `edit` (`value` required), or `park`. When the response `state` is `ready_to_confirm`, confirm it:
-
-```bash
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{}' \
-  http://127.0.0.1:8765/clarify/12/confirm
-```
-
-`POST /clarify/start` with `"skip": true`, or `POST /chat` with `"clarify": "skip"`, writes `brief` = `skipped` and hands that brief to retrieval. `GET /clarify/active` restores an unfinished session after a restart. `CLARIFY_MAX_QUESTIONS` defaults to 7 (1–7). Question text can be polished when `CLARIFY_LLM_API_KEY` or `LLM_API_KEY` is set; otherwise the template is used.
-
-With verify enabled:
-
-```bash
-export FEATURE_VERIFY=1
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
-  -d '{"item_ids":[1],"mode":"hash_mtime"}' \
-  http://127.0.0.1:8765/verify
-curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/verify/1
-```
-
-`mode` `refetch` writes the file back into the library. Without `FEATURE_VERIFY`, both verify routes still return **501**.
-
-With `FEATURE_IMA` unset, these routes still return **501**:
-
-| Method | Path |
-|---|---|
-| GET, POST | `/connectors` |
-| POST | `/connectors/{id}/sync` |
-| GET | `/connectors/{id}/status` |
-| DELETE | `/connectors/{id}` |
-| GET, POST, DELETE | `/settings/ima` |
-| GET | `/connectors/ima/bases`, `/connectors/ima/folders` |
-| POST | `/connectors/ima/search`, `/connectors/ima/import` |
-
-With `FEATURE_IMA=1` those routes are the ima connector. `POST /settings/key` is still the M0 stub and does not store provider keys.
-
-Apply migrations without starting the server. `DATA_DIR` is used when you leave the default URL in `alembic.ini` alone. `init_db(path)` always targets `<path>/data/app.db`.
-
-```bash
-cd services/sidecar
-export DATA_DIR="$PWD/../../.data"
-alembic upgrade head
-python -c "from app.db.session import init_db; print(init_db())"
-```
-
-On an empty file the migration creates the v1.0 tables plus v1.1 columns, then M3 adds `fts_chunks` (FTS5 trigram) and `chunk_vector`, then M4 adds nullable `source_path` and `freshness_reason`. On a database that already has v1.0 tables (`content_item`, `conversation`, `message`) it adds the new nullable columns and creates `clarify_session`, `connector_account`, `decision_log`, and `verify_job`, then the M3 index tables, then the M4 columns. Existing rows get `fetched_at = collected_at` and `freshness_state = 'unknown'`. Head revision is `0003_m4`.
-
-Tests:
-
-```bash
-cd services/sidecar
-python -m pytest -q
-```
-
-## Desktop shell
-
-Node.js 22.
-
-```bash
-npm install
+export VITE_FEATURE_ASK=true
 npm run dev
 ```
 
-The main process picks a free localhost port, starts `uvicorn app.main:app`, and stops that child on quit. Python resolution order:
+Windows PowerShell：
 
-1. `SIDECAR_PYTHON`
-2. `<repo>/.venv/bin/python` (Windows: `.venv\Scripts\python.exe`)
-3. `<repo>/services/sidecar/.venv/bin/python`
-4. `python3` on `PATH`
-
-The window is the library (import, list, delete, index status) and a chat pane. Citations are buttons; choosing one shows the chunk text and can open the stored file. Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier. Set `VITE_FEATURE_JEV=true` to mount the decision panel. Set `VITE_FEATURE_VERIFY=true` to show 查证 on library rows and citations, the stale update prompt, and automatic checks when a question contains a freshness cue. The shell copies that flag to the sidecar as `FEATURE_VERIFY`. `features.ima` also defaults to `false`. Set `VITE_FEATURE_IMA=true` to show the ima panel; the shell copies it as `FEATURE_IMA`. While that flag is off, `/connectors` and `/settings/ima` stay **501**.
-
-ima credentials are `IMA_CLIENT_ID` and `IMA_API_KEY` (the official client also accepts `IMA_OPENAPI_CLIENTID` and `IMA_OPENAPI_APIKEY`). If those are unset, the settings panel stores them in `$DATA_DIR/secrets/ima.json` (mode `0600`), not in SQLite. Requests go to `https://ima.qq.com` unless `IMA_BASE_URL` is set. Endpoint paths and the `ima-openapi-clientid` / `ima-openapi-apikey` headers live in `services/sidecar/app/connectors/ima_client.py`. A live check (status and field names only) showed `search_knowledge_base` items use `kb_id` / `kb_name` rather than `id` / `name`, `search_knowledge` returns `data.info_list`, `search_note` returns `search_note_infos`, and a bad API key is HTTP 401 (`凭据无效`). A real-key check that does not print content:
-
-```bash
-cd services/sidecar
-export IMA_CLIENT_ID=... IMA_API_KEY=...
-python scripts/ima_smoke.py
+```powershell
+$env:VITE_FEATURE_ASK="true"
+npm run dev
 ```
 
-Imported rows use `platform=ima`, `source_kind=connector`, and the ima id in `external_id`. With the ima account enabled they are retrieved in personal mode because they already sit in the local library; the citation badge says 应用知识库. Disconnecting the account leaves the rows on disk and drops them from new answers. With `FEATURE_VERIFY=1`, `POST /verify` re-fetches those rows through the API and compares `content_hash` (`fresh` / `stale`). If ima cannot be reached the state is `unknown`. List and search calls are cached (`IMA_CACHE_TTL_S`, default 60) and spaced (`IMA_MIN_INTERVAL_S`, default 0.2, `IMA_MAX_PER_MINUTE`, default 30). Those numbers are local guards — ima's quota is not published. LLM calls stay on the configured OpenAI-compatible endpoint (DeepSeek from mainland China). Embedding downloads still use `HF_ENDPOINT=https://hf-mirror.com` when `EMBED_PROVIDER=bge`.
+想连 ima 一起用，再加一个开关（同样要在 `npm run dev` 之前设置）：
 
 ```bash
-VITE_FEATURE_VERIFY=true VITE_FEATURE_JEV=true npm run dev
+export VITE_FEATURE_ASK=true
+export VITE_FEATURE_IMA=true
+npm run dev
 ```
 
-Import with “按路径导入” when you want 查证 to re-read that same file. A picked file is copied into the library directory and that copy is the source.
+`VITE_FEATURE_CLARIFY` 是另一块独立的澄清面板。提问流程自己会追问，不依赖这个开关。
 
-## Not in this revision
+如果要单独启动后台（窗口不会出现），在 `services/sidecar` 里、虚拟环境已激活时执行：
 
-M6 is not implemented: no live web search or web re-fetch. MediaCrawler is not downloaded. BGE-M3 and the reranker are not loaded unless `EMBED_PROVIDER=bge`. The Jev rule client is not a model endpoint. Google search and the fallback provider raise `SearchUnavailable` instead of calling out. `/connectors` returns 501 until `FEATURE_IMA` is on. `/verify` returns 501 until `FEATURE_VERIFY` is on. Notion and local-folder connectors are still placeholders.
+```bash
+export SIDECAR_TOKEN=devtoken
+export DATA_DIR="$PWD/../../.data"
+export FEATURE_ASK=1
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+```
+
+`FEATURE_ASK=1` 和 `VITE_FEATURE_ASK=true` 是同一个功能：前者给单独启动的后台，后者给桌面窗口。用 `npm run dev` 时设置 `VITE_FEATURE_ASK` 即可。
+
+## 填写密钥
+
+真密钥不要出现在命令历史以外的文件里，也不要提交到 git。
+
+**方式一：启动前写在环境变量里**（桌面程序和单独启动的后台都会读到）
+
+```bash
+export DEEPSEEK_API_KEY=在这里粘贴你的密钥
+export SERPER_API_KEY=在这里粘贴你的密钥
+export IMA_CLIENT_ID=在这里粘贴你的ClientID
+export IMA_API_KEY=在这里粘贴你的密钥
+```
+
+上网搜索也可以改用 `SERPAPI_API_KEY` 或 `TAVILY_API_KEY`。三个搜索密钥里有一个即可。
+
+**方式二：写在本机文件里**
+
+单独启动后台时，`DATA_DIR` 就是你上面设置的目录。在里面新建两个文件（只给自己读）：
+
+`$DATA_DIR/secrets/ask.json`
+
+```json
+{
+  "deepseek_api_key": "在这里粘贴你的密钥",
+  "serper_api_key": "在这里粘贴你的密钥"
+}
+```
+
+`$DATA_DIR/secrets/ima.json`
+
+```json
+{
+  "client_id": "在这里粘贴你的ClientID",
+  "api_key": "在这里粘贴你的密钥"
+}
+```
+
+**方式三：写在窗口里**
+
+打开提问之后，窗口里有「问答密钥」，可以填写 DeepSeek、Serper、SerpApi、Tavily。打开 ima 面板后，可以填写 Client ID 和 API Key。保存后只留在本机，不会写进知识库数据库，界面也不会把已保存的密钥再显示出来。
+
+环境变量优先于文件。用桌面窗口时，优先用方式一或方式三，不必去猜数据目录在哪。
+
+ima 的 Client ID 和 API Key 从 [https://ima.qq.com/agent-interface](https://ima.qq.com/agent-interface) 获取。使用官方密钥，不要粘贴登录 Cookie。
+
+## 怎么用
+
+1. 在输入框写下问题，例如「某地附近的餐厅推荐」，然后发送。
+2. 如果范围还没说清，程序会一次问一件事。有选项时点其中一个；要改说法就在框里输入。地点题没有预设答案，需要你写清楚或从列出的候选里选。
+3. 回答里的 `[1]`、`[2]` 是引用。点引用可以看摘录，并知道它来自本地文件、ima 知识库还是网页。
+4. 只想查已经导入的文档时，可以不打开提问。先在左侧导入 md、txt、pdf 或 docx，再在输入框提问。库里没有相关内容时，会直接说明没有找到。
+
+本地生活类问题（餐厅、附近、出游）默认查网页。如果你点名要查笔记、本地文件或某个知识库，才会去查那些库。
+
+## 常见问题
+
+**窗口里还是只能查已导入的文档**
+
+启动前没有设置 `VITE_FEATURE_ASK=true`。关掉窗口，在同一个终端里先设置变量，再执行 `npm run dev`。
+
+**提示没有配置联网搜索密钥**
+
+填写 `SERPER_API_KEY`，或改用 `SERPAPI_API_KEY`、`TAVILY_API_KEY`。没有 DeepSeek 密钥时，程序仍会尽量用摘录回答，但不会调用模型组织长回答。
+
+**回答写着「没找到可引用的来源」**
+
+找到的材料里没有能对上这句话的句子。换一种问法，或先把相关笔记导入本地库。
+
+**地点题无法直接采用空白推荐**
+
+地点必须由你选定。从选项里点一个，或自己写上具体地点。
+
+**网上没有实时评分**
+
+程序不会编造评分。需要分数时，请以大众点评 App 为准；摘录里写了的分数才会出现在回答里。
+
+**`npm install` 或 `npm run dev` 失败**
+
+确认 Node.js 是 22：`node -v`。
+
+**后台装不上或启动报错**
+
+确认 Python 是 3.11 或 3.12：`python3 --version`。在 `services/sidecar` 里使用上面的虚拟环境，并已执行 `pip install -r requirements-core.txt`。
+
+**单独访问后台时返回 401**
+
+请求要带上和 `SIDECAR_TOKEN` 相同的头 `x-sidecar-token`。用桌面窗口时，程序会自己带上，不用手填。

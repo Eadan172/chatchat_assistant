@@ -1,13 +1,13 @@
 from app.web_search import live, page
 
 NAV = "<nav><a>首页</a> <a>法学</a> <a>经济学</a> <a>登录</a> <a>新用户注册</a></nav>"
-ARTICLE = "".join(f"<p>第一性原理要求把问题拆到最基本的事实，再从这些事实出发推理，第{i}段说明它在 AI 产品设计中的用法。</p>" for i in range(8))
+ARTICLE = "".join(f"<p>示例概念要求把问题拆到最基本的事实，再从这些事实出发推理，第{i}段说明它在 AI 产品设计中的用法。</p>" for i in range(8))
 HTML = f"<html><head><title>t</title></head><body>{NAV}<article><h1>标题</h1>{ARTICLE}</article><footer>版权所有 联系我们</footer></body></html>"
 
 
 def test_extract_drops_nav_and_footer():
     text = page._html_to_text(HTML)
-    assert "第一性原理要求" in text
+    assert "示例概念要求" in text
     assert "新用户注册" not in text
     assert "联系我们" not in text
 
@@ -15,7 +15,7 @@ def test_extract_drops_nav_and_footer():
 def test_readability_fallback_when_trafilatura_empty(monkeypatch):
     monkeypatch.setattr(page, "_trafilatura", lambda raw: "")
     text = page._html_to_text(HTML)
-    assert "第一性原理要求" in text
+    assert "示例概念要求" in text
     assert "新用户注册" not in text
 
 
