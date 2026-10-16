@@ -8,7 +8,7 @@ interface DesktopHealth {
 }
 
 interface DesktopBridge {
-  features: { clarify: boolean; jev: boolean; verify: boolean }
+  features: { clarify: boolean; jev: boolean; verify: boolean; ima: boolean }
   getHealth: () => Promise<DesktopHealth>
   sidecarRequest: (payload: { method: string; path: string; body?: unknown }) => Promise<{
     ok: boolean
@@ -29,6 +29,7 @@ declare global {
     readonly VITE_FEATURE_CLARIFY?: string
     readonly VITE_FEATURE_JEV?: string
     readonly VITE_FEATURE_VERIFY?: string
+    readonly VITE_FEATURE_IMA?: string
     readonly VITE_SIDECAR_URL?: string
     readonly VITE_SIDECAR_TOKEN?: string
   }

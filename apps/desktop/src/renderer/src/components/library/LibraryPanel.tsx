@@ -7,6 +7,7 @@ interface LibraryItem {
   id: number
   title?: string | null
   filename?: string
+  platform?: string
   index_state?: string
   chunk_count?: number
   last_error?: string | null
@@ -59,6 +60,9 @@ export function LibraryPanel({ verifyOn = false }: { verifyOn?: boolean }) {
 
   useEffect(() => {
     void reload()
+    const onChange = () => void reload()
+    window.addEventListener('library-changed', onChange)
+    return () => window.removeEventListener('library-changed', onChange)
   }, [])
 
   async function onFiles(files: FileList | null) {
@@ -221,7 +225,14 @@ export function LibraryPanel({ verifyOn = false }: { verifyOn?: boolean }) {
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm">{item.filename || item.title || '未命名'}</p>
+                <p className="text-sm">
+                  {item.filename || item.title || '未命名'}
+                  {item.platform === 'ima' ? (
+                    <span data-testid="library-source" data-source="ima" className="ml-2 rounded-full bg-pool px-2 py-0.5 text-xs">
+                      应用知识库
+                    </span>
+                  ) : null}
+                </p>
                 <p className="text-xs text-slate-500" data-testid="library-status">
                   {statusLabel(item.index_state)}
                   {typeof item.chunk_count === 'number' ? ` · ${item.chunk_count} 块` : ''}

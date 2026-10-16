@@ -6,6 +6,7 @@ plus token overlap so the offline demo does not load FlagEmbedding.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import sqlite3
@@ -166,11 +167,23 @@ async def hybrid_search(
 def _allowed_ids(conn: sqlite3.Connection, *, mode: str, sources: list[str] | None) -> set[int]:
     requested = set(sources or ["local"])
     rows = conn.execute(
-        "SELECT id, source_kind, index_state FROM content_item WHERE index_state = 'indexed'"
+        "SELECT id, source_kind, platform FROM content_item WHERE index_state = 'indexed'"
     ).fetchall()
+    ima_on = _ima_account_enabled(conn)
     allowed: set[int] = set()
-    for item_id, kind, _state in rows:
+    for item_id, kind, platform in rows:
         source_kind = kind or "local_file"
+        platform_name = platform or ""
+        if source_kind == "connector" and platform_name == "ima":
+            # Imported ima rows already live in the local library. They stay
+            # searchable while the ima account is enabled, including personal
+            # mode. Other connectors are still excluded from personal mode.
+            if not ima_on:
+                continue
+            if "local" not in requested and "connector" not in requested:
+                continue
+            allowed.add(int(item_id))
+            continue
         if mode == "personal" and source_kind in {"web", "connector"}:
             continue
         if source_kind == "web" and "web" not in requested:
@@ -181,6 +194,15 @@ def _allowed_ids(conn: sqlite3.Connection, *, mode: str, sources: list[str] | No
             continue
         allowed.add(int(item_id))
     return allowed
+
+
+def _ima_account_enabled(conn: sqlite3.Connection) -> bool:
+    if not _has_table(conn, "connector_account"):
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM connector_account WHERE connector_type = 'ima' AND enabled = 1 LIMIT 1"
+    ).fetchone()
+    return row is not None
 
 
 def _dense_rank(conn, query: str, allowed: set[int], limit: int, registry) -> tuple[list[int], dict[int, float]]:
@@ -291,7 +313,7 @@ def _hydrate(conn, fused: Sequence[tuple[int, float]], allowed: set[int], *, que
         row = conn.execute(
             """
             SELECT c.id, c.item_id, c.ordinal, c.text, c.token_count,
-                   i.title, i.url, i.platform, i.source_kind, i.freshness_state, i.source_id
+                   i.title, i.url, i.platform, i.source_kind, i.freshness_state, i.source_id, i.metrics
             FROM chunk AS c
             JOIN content_item AS i ON i.id = c.item_id
             WHERE c.id = ?
@@ -302,6 +324,7 @@ def _hydrate(conn, fused: Sequence[tuple[int, float]], allowed: set[int], *, que
             continue
         overlap = len(query_tokens & set(tokens(row[3] or "")))
         blended = (score / best) + min(overlap, 12) * 0.01
+        filename = _display_filename(row[11], row[10] or "")
         hits.append(
             {
                 "chunk_id": int(row[0]),
@@ -309,17 +332,31 @@ def _hydrate(conn, fused: Sequence[tuple[int, float]], allowed: set[int], *, que
                 "ordinal": int(row[2]),
                 "text": row[3] or "",
                 "token_count": int(row[4] or token_count(row[3] or "")),
-                "title": row[5] or row[10] or "未命名",
+                "title": row[5] or filename or "未命名",
                 "url": row[6] or "",
                 "platform": row[7] or "local_file",
                 "source_kind": row[8] or "local_file",
                 "freshness_state": row[9] or "unknown",
-                "filename": row[10] or "",
+                "filename": filename,
                 "score": round(min(1.0, blended), 4),
             }
         )
     hits.sort(key=lambda item: item["score"], reverse=True)
     return hits
+
+
+def _display_filename(metrics: Any, source_id: str) -> str:
+    payload = metrics
+    if isinstance(metrics, str):
+        try:
+            payload = json.loads(metrics)
+        except json.JSONDecodeError:
+            payload = None
+    if isinstance(payload, dict):
+        name = payload.get("filename")
+        if isinstance(name, str) and name.strip():
+            return name
+    return source_id or ""
 
 
 def _number(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
