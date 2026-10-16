@@ -3,6 +3,10 @@
 Callers depend on DecisionClient. RuleBasedDecisionClient is the local
 placeholder. A future endpoint implements the same three methods and is
 returned from build_decision_client; this module does not call a network.
+
+If that remote hook is added, prefer DeepSeek's OpenAI-compatible API
+(https://api.deepseek.com, model deepseek-v4-flash). Do not default it to
+Gemini or https://api.openai.com — those time out from mainland China.
 """
 
 from __future__ import annotations
@@ -43,7 +47,28 @@ class DecisionClient(Protocol):
         """Yes/no gate. `result` is a bool."""
 
 
-_FRESHNESS = ("最新", "还有效", "过期", "今天", "现在", "更新", "latest", "still valid", "2024", "2025", "2026")
+_FRESHNESS = (
+    "最新",
+    "当前",
+    "现在",
+    "目前",
+    "眼下",
+    "此刻",
+    "近期",
+    "最近",
+    "今年",
+    "今天",
+    "还有效",
+    "过期",
+    "过时",
+    "时效",
+    "更新",
+    "latest",
+    "still valid",
+    "2024",
+    "2025",
+    "2026",
+)
 _HOWTO = ("怎么", "如何", "怎样", "how to", "how do")
 _COMPARE = ("对比", "区别", "相比", "versus", " vs ")
 _WEB = ("网上", "网络", "网页", "互联网", "搜索", "online", "web")
@@ -187,6 +212,10 @@ def register_decision_backend(kind: str, factory) -> None:
 
     ``build_decision_client("remote")`` keeps raising until something registers
     that name. Chat still treats the result as shadow advice.
+
+    Example config for that endpoint, when it exists: OpenAI-compatible
+    DeepSeek at https://api.deepseek.com with ``deepseek-v4-flash``. Gemini and
+    api.openai.com are the wrong default from mainland China.
     """
     if kind == "rule":
         raise ValueError("the rule backend is built in")

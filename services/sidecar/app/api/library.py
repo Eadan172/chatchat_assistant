@@ -39,10 +39,10 @@ def list_items() -> dict:
 
 @router.post("/import")
 def import_item(body: ImportBody) -> dict:
-    filename, data = _bytes(body)
+    filename, data, source_path = _bytes(body)
     with open_session() as db:
         try:
-            return import_payload(db, filename=filename, data=data)
+            return import_payload(db, filename=filename, data=data, source_path=source_path)
         except ImportError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
@@ -65,25 +65,27 @@ def delete_item(item_id: int) -> dict:
     return {"id": item_id, "deleted": True, "stub": False}
 
 
-def _bytes(body: ImportBody) -> tuple[str, bytes]:
+def _bytes(body: ImportBody) -> tuple[str, bytes, str | None]:
     if body.path:
         file_path = Path(body.path)
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="找不到要导入的文件")
-        return body.filename or file_path.name, file_path.read_bytes()
+        return body.filename or file_path.name, file_path.read_bytes(), str(file_path.resolve())
     if body.content_base64:
         try:
-            return body.filename, decode_base64(body.content_base64)
+            return body.filename, decode_base64(body.content_base64), None
         except ImportError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     if body.text is not None:
-        return body.filename, body.text.encode("utf-8")
+        return body.filename, body.text.encode("utf-8"), None
     raise HTTPException(status_code=400, detail="请提供文件内容")
 
 
 def _public(item: ContentItem, chunks: int) -> dict:
     metrics = item.metrics or {}
     collected = item.collected_at.isoformat(timespec="seconds") if item.collected_at else None
+    fetched = item.fetched_at.isoformat(timespec="seconds") if item.fetched_at else None
+    mtime = item.source_mtime.isoformat(timespec="seconds") if item.source_mtime else None
     return {
         "id": item.id,
         "title": item.title,
@@ -95,6 +97,13 @@ def _public(item: ContentItem, chunks: int) -> dict:
         "url": item.url,
         "chunk_count": chunks,
         "collected_at": collected,
+        "fetched_at": fetched,
+        "source_mtime": mtime,
+        "content_hash": item.content_hash,
+        "freshness_state": item.freshness_state or "unknown",
+        "freshness_reason": item.freshness_reason,
+        "source_path": item.source_path,
+        "prompt_update": item.freshness_state == "stale",
     }
 
 

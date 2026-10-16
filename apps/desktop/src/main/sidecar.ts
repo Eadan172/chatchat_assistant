@@ -42,6 +42,11 @@ function pythonBin(repoRoot: string): string {
   return process.platform === 'win32' ? 'python' : 'python3'
 }
 
+function verifyFlag(): string {
+  const raw = (process.env.FEATURE_VERIFY || process.env.VITE_FEATURE_VERIFY || '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on' ? '1' : ''
+}
+
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer()
@@ -77,6 +82,8 @@ export async function startSidecar(): Promise<string> {
       SIDECAR_TOKEN: sidecarToken,
       DATA_DIR: app.getPath('userData'),
       PYTHONUNBUFFERED: '1',
+      // The renderer reads VITE_FEATURE_VERIFY. Pass the same switch to Python.
+      FEATURE_VERIFY: verifyFlag(),
     },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],

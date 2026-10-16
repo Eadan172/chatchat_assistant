@@ -7,9 +7,10 @@ export function allowedSidecarPath(method: string, requestPath: string): boolean
   if (pathOnly === '/decision/logs') return method === 'GET'
   if (pathOnly === '/decision/shadow') return method === 'POST'
   if (pathOnly === '/library/items') return method === 'GET'
-  if (pathOnly === '/library/import' || pathOnly === '/index/rebuild' || pathOnly === '/search') {
+  if (pathOnly === '/library/import' || pathOnly === '/index/rebuild' || pathOnly === '/search' || pathOnly === '/verify') {
     return method === 'POST'
   }
+  if (/^\/verify\/\d+$/.test(pathOnly)) return method === 'GET'
   if (
     pathOnly === '/chat' ||
     pathOnly === '/clarify/start' ||

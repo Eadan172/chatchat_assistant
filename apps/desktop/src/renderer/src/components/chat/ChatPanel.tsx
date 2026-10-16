@@ -1,6 +1,15 @@
 import { useState } from 'react'
 import { errorMessage, sidecarRequest, type SidecarEvent } from '../clarify/client'
+import { verifyItems } from '../verify/client'
+import { freshnessClass, freshnessLabel } from '../verify/view'
 import { citationLabel, isNotFound, type Citation } from './citations'
+
+interface FreshnessNote {
+  item_id?: number
+  state?: string
+  action?: string
+  prompt_update?: boolean
+}
 
 interface Turn {
   id: number
@@ -8,6 +17,8 @@ interface Turn {
   content: string
   citations: Citation[]
   pending?: boolean
+  freshness: FreshnessNote[]
+  needsVerify: boolean | null
 }
 
 function asCitation(data: unknown): Citation | null {
@@ -15,12 +26,13 @@ function asCitation(data: unknown): Citation | null {
   return data as Citation
 }
 
-export function ChatPanel() {
+export function ChatPanel({ verifyOn = false }: { verifyOn?: boolean }) {
   const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [active, setActive] = useState<Citation | null>(null)
+  const [checkingId, setCheckingId] = useState<number | null>(null)
 
   async function ask(text: string) {
     const question = text.trim()
@@ -33,8 +45,8 @@ export function ChatPanel() {
     setPending(true)
     setTurns((current) => [
       ...current,
-      { id: userId, role: 'user', content: question, citations: [] },
-      { id: assistantId, role: 'assistant', content: '', citations: [], pending: true },
+      { id: userId, role: 'user', content: question, citations: [], freshness: [], needsVerify: null },
+      { id: assistantId, role: 'assistant', content: '', citations: [], pending: true, freshness: [], needsVerify: null },
     ])
 
     const apply = (event: SidecarEvent) => {
@@ -45,6 +57,31 @@ export function ChatPanel() {
           current.map((turn) =>
             turn.id === assistantId ? { ...turn, citations: [...turn.citations, citation] } : turn,
           ),
+        )
+        return
+      }
+      if (event.event === 'decision' && verifyOn) {
+        const data = event.data
+        if (data && typeof data === 'object' && (data as { question_id?: string }).question_id === 'needs_verify') {
+          const result = (data as { result?: unknown }).result
+          setTurns((current) =>
+            current.map((turn) => (turn.id === assistantId ? { ...turn, needsVerify: result === true } : turn)),
+          )
+        }
+        return
+      }
+      if (event.event === 'freshness' && verifyOn) {
+        const data = event.data
+        if (!data || typeof data !== 'object') return
+        const note = data as FreshnessNote
+        setTurns((current) =>
+          current.map((turn) => {
+            if (turn.id !== assistantId) return turn
+            const citations = turn.citations.map((citation) =>
+              citation.item_id === note.item_id ? { ...citation, freshness_state: note.state } : citation,
+            )
+            return { ...turn, citations, freshness: [...turn.freshness, note] }
+          }),
         )
         return
       }
@@ -83,6 +120,29 @@ export function ChatPanel() {
     }
   }
 
+  async function checkCitation(citation: Citation) {
+    if (!citation.item_id) return
+    const itemId = citation.item_id
+    setCheckingId(itemId)
+    setError(null)
+    try {
+      const job = await verifyItems([itemId], 'hash_mtime')
+      const row = job.items.find((item) => item.item_id === itemId)
+      const state = row?.state || citation.freshness_state
+      setTurns((current) =>
+        current.map((turn) => ({
+          ...turn,
+          citations: turn.citations.map((item) => (item.item_id === itemId ? { ...item, freshness_state: state } : item)),
+        })),
+      )
+      setActive((current) => (current && current.item_id === itemId ? { ...current, freshness_state: state } : current))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '查证失败')
+    } finally {
+      setCheckingId(null)
+    }
+  }
+
   return (
     <section className="flex min-h-[32rem] flex-col rounded-2xl bg-white/80 p-5 shadow-sm ring-1 ring-pool">
       <div className="flex items-center justify-between">
@@ -104,6 +164,18 @@ export function ChatPanel() {
             >
               {turn.content || (turn.pending ? '正在检索…' : '')}
             </p>
+            {verifyOn && turn.role === 'assistant' && turn.needsVerify != null ? (
+              <p className="mt-1 text-xs text-slate-500" data-testid="needs-verify-log">
+                needs_verify · {turn.needsVerify ? 'true' : 'false'}
+                {turn.freshness.length > 0 ? ' · 已自动查证' : ''}
+              </p>
+            ) : null}
+            {verifyOn && turn.freshness.length > 0 ? (
+              <p className="mt-1 text-xs text-sage" data-testid="auto-verify">
+                已根据提问自动查证
+                {turn.freshness.map((note) => ` · ${freshnessLabel(note.state)}`).join('')}
+              </p>
+            ) : null}
             {turn.citations.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 {turn.citations.map((citation) => (
@@ -111,10 +183,20 @@ export function ChatPanel() {
                     key={`${citation.chunk_id}-${citation.n}`}
                     type="button"
                     data-testid="citation"
+                    data-freshness={citation.freshness_state || 'unknown'}
                     className="rounded-full bg-pool px-3 py-1 text-xs text-ink"
                     onClick={() => setActive(citation)}
                   >
                     {citationLabel(citation)}
+                    {verifyOn ? (
+                      <span
+                        data-testid="freshness-badge"
+                        data-state={citation.freshness_state || 'unknown'}
+                        className={`ml-2 rounded-full px-2 py-0.5 ${freshnessClass(citation.freshness_state)}`}
+                      >
+                        {freshnessLabel(citation.freshness_state)}
+                      </span>
+                    ) : null}
                   </button>
                 ))}
               </div>
@@ -126,6 +208,31 @@ export function ChatPanel() {
         <div className="mt-4 rounded-xl bg-mist px-4 py-3" data-testid="citation-quote">
           <p className="text-xs text-sage">{citationLabel(active)}</p>
           <p className="mt-2 whitespace-pre-wrap text-sm">{active.text}</p>
+          {verifyOn && active.item_id ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span
+                data-testid="citation-freshness"
+                data-state={checkingId === active.item_id ? 'verifying' : active.freshness_state || 'unknown'}
+                className={`rounded-full px-2 py-0.5 text-xs ${freshnessClass(checkingId === active.item_id ? 'verifying' : active.freshness_state)}`}
+              >
+                {freshnessLabel(checkingId === active.item_id ? 'verifying' : active.freshness_state)}
+              </span>
+              <button
+                type="button"
+                data-testid="citation-verify"
+                className="text-xs text-sage disabled:opacity-50"
+                disabled={checkingId === active.item_id}
+                onClick={() => void checkCitation(active)}
+              >
+                {checkingId === active.item_id ? '查证中…' : '查证'}
+              </button>
+            </div>
+          ) : null}
+          {verifyOn && active.freshness_state === 'stale' ? (
+            <p data-testid="citation-update-prompt" className="mt-2 rounded-xl bg-amber-100 px-3 py-2 text-xs text-amber-950">
+              这条引用可能已过期。可以在知识库里更新该文件。
+            </p>
+          ) : null}
           {active.url ? (
             <button
               type="button"

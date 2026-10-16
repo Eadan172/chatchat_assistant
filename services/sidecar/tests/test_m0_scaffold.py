@@ -265,6 +265,7 @@ def test_upgrade_existing_v1_database(tmp_path) -> None:
         message_cols = {col[1] for col in conn.execute(text("PRAGMA table_info(message)"))}
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         tables = set(conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).scalars())
+        content_cols = {col[1] for col in conn.execute(text("PRAGMA table_info(content_item)"))}
     check.dispose()
 
     assert row.platform == "zhihu"
@@ -278,5 +279,7 @@ def test_upgrade_existing_v1_database(tmp_path) -> None:
     assert row.external_id is None
     assert {"clarify_session_id", "source_policy"} <= conversation_cols
     assert "decision_trace_id" in message_cols
-    assert version == "0002_m3"
+    assert version == "0003_m4"
+    assert "source_path" in content_cols
+    assert "freshness_reason" in content_cols
     assert {"clarify_session", "connector_account", "decision_log", "verify_job", "fts_chunks", "chunk_vector"} <= tables

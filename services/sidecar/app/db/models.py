@@ -42,6 +42,8 @@ class ContentItem(SQLModel, table=True):
     source_mtime: datetime | None = None
     freshness_state: str = Field(default="unknown", index=True)
     verified_at: datetime | None = None
+    source_path: str | None = None
+    freshness_reason: str | None = None
     source_kind: str | None = Field(default=None, index=True)
     connector_id: str | None = None
     external_id: str | None = None
