@@ -349,9 +349,14 @@ def clean_ambiguities(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             text = str(value).strip()
             if text and text != term and text not in options:
                 options.append(text)
-        if term and len(options) >= 2:
+        if not term or _PREFERENCE.search(term):
+            continue
+        if len(options) >= 2:
             found.append({"term": term, "options": options[:6]})
     return found
+
+
+_PREFERENCE = re.compile(r"价格|亲民|人均|预算|便宜|贵|地铁|距离|步行|口味|菜系|评分|点评|最近|交通|不限")
 
 
 _FOOD = ("美食", "餐厅", "饭店", "餐馆", "小吃", "日料", "料理", "寿司")
@@ -376,6 +381,18 @@ def vague_food_query(text: str) -> bool:
         any(mark in blob for mark in _METRO),
     )
     return not all(specified)
+
+
+def specified_food_query(text: str) -> bool:
+    """Food question that already names cuisine, score basis, price, and metro."""
+    blob = text or ""
+    if not any(mark in blob for mark in _FOOD):
+        return False
+    cuisine = any(mark in blob for mark in _CUISINE)
+    basis = any(mark in blob for mark in _BASIS) or "打分" in blob
+    price = any(mark in blob for mark in _PRICE_MARK)
+    metro = any(mark in blob for mark in _METRO) or "距离" in blob
+    return cuisine and basis and price and metro
 
 
 def _choice_node(node_id: str, prompt: str, options: list[str], reason: str) -> DesignNode:

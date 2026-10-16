@@ -29,6 +29,7 @@ from app.retrieval.hybrid import RRF_K, rrf_fuse
 
 CONFLICT_PHRASE = "两处来源说法不同"
 NO_HITS = "没有检索到可引用的内容。"
+NO_CITATIONS = "没找到可引用的来源"
 GROUPED_NO_KEY = "未配置 DeepSeek，已按来源列出检索结果。"
 GROUPED_FAILED = "DeepSeek 暂时不可用，已按来源列出检索结果。"
 
@@ -274,6 +275,13 @@ def synthesize(
     def finish(text: str, provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> Synthesis:
         limited = ensure_external_limits(query, text, evidences)
         cleaned, used = align_citations(strip_empty_points(limited), citations)
+        if provider == "deepseek" and evidences and not used:
+            notices = [
+                line
+                for line in cleaned.splitlines()
+                if line.strip() and any(mark in line for mark in _NOTICE_MARKS)
+            ]
+            cleaned = _join(NO_CITATIONS, "\n".join(notices))
         return Synthesis(
             append_related(cleaned, tail),
             provider,
@@ -303,8 +311,9 @@ def synthesize(
             citations,
             complete,
         )
-    text = _join(text, format_rank_block(query, evidences))
     text = ensure_score_notice(query, text, evidences)
+    text = apply_price_constraint(query, text, evidences)
+    text = flag_stale_sources(text, evidences)
     return finish(
         text,
         "deepseek",
@@ -391,21 +400,51 @@ def public_citation(item: Evidence) -> dict[str, Any]:
 
 _RANK_QUERY = re.compile(r"排名|榜单|排行|(?<![A-Za-z])top(?![A-Za-z])", re.IGNORECASE)
 _LIST_TITLE = re.compile(r"TOP|排行榜|榜单|排名", re.IGNORECASE)
-_EXPLICIT_RANK = re.compile(
-    r"(?i)(?:top\s*([0-9]{1,2})|(?<!\d)([0-9]{1,2})\s*[.、．)、]|第\s*([0-9]{1,2}|[一二三四五六七八九十])\s*名)"
+_RANK_MARK = re.compile(
+    r"第\s*([0-9]{1,2}|[一二三四五六七八九十])\s*名"
+    r"|(?<![A-Za-z])TOP\s*([0-9]{1,2})"
+    r"|(?<![A-Za-z])NO\.\s*([0-9]{1,2})",
+    re.IGNORECASE,
 )
-_SCORE = re.compile(r"评分|口碑|星级|\d+(?:\.\d+)?\s*分")
+_HAS_SCORE = re.compile(r"评分|口碑|星级|\d+(?:\.\d+)?\s*分|(?<!\d)\d\.\d(?!\d)")
 _BUDGET = re.compile(r"(?:人均|预算)\s*(\d+)\s*(?:元)?\s*(?:以?内|以下)")
-_PRICE = re.compile(r"人均\s*(\d+)")
-_KEEP_LINE = ("两处来源说法不同", "时效：", "超出预算", "来源未标名次", "价格未知", "没有实时评分", "没有评分", "没有口碑", "相关条目")
+_MONEY = re.compile(r"(?:¥|￥)\s*(\d{2,6})|人均\s*(\d{2,5})|(?<![0-9])(\d{2,5})\s*元")
+_YEAR = re.compile(r"((?:19|20)\d{2})\s*年")
+_KEEP_LINE = (
+    "两处来源说法不同",
+    "时效：",
+    "超出预算",
+    "已排除高于",
+    "按人均",
+    "可能已过时",
+    "没有实时评分",
+    "没有评分",
+    "没有口碑",
+    "相关条目",
+    "评分以大众点评",
+    "精确距离",
+    NO_CITATIONS,
+)
 _CN_RANK = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 NO_LIVE_SCORE = "摘录里没有实时评分或口碑分数。"
 DIANPING_NOTICE = "评分以大众点评 App 为准。"
 DISTANCE_GAP = "来源没有写到地铁站的步行时间或距离，精确距离无法确认。"
+AFFORDABLE_CAP = 150
+STALE_YEAR = 2019
 DEFAULT_CITATION_CHARS = 4000
 _CITE_ONLY = re.compile(r"^(?:\s*\[\d+\])+\s*$")
 _DECIMAL = re.compile(r"\d+\.\d+")
 _DISTANCE = re.compile(r"距[^。\n]{0,30}步行\s*\d+\s*分钟|步行\s*\d+\s*分钟")
+_OPEN_QUOTES = {"「": "」", "“": "”", '"': '"'}
+_NOTICE_MARKS = (
+    DIANPING_NOTICE,
+    DISTANCE_GAP,
+    NO_LIVE_SCORE,
+    "按人均",
+    "已排除高于",
+    "可能已过时",
+    "超出预算",
+)
 
 
 def ranking_requested(query: str) -> bool:
@@ -424,17 +463,11 @@ def citation_excerpt_limit() -> int:
 def citation_supports(claim: str, source: str) -> bool:
     """True when this sentence's facts, not just its topic, are in the excerpt."""
     body = _CITE.sub(" ", claim or "")
-    claimed = explicit_rank_entries(body)
-    if claimed:
-        stated = explicit_rank_entries(source or "")
-        if not stated:
-            return False
-        by_rank = {rank: name for rank, name, _price in stated}
-        for rank, name, _price in claimed:
-            source_name = by_rank.get(rank, "")
-            if not source_name or (name not in source_name and source_name not in name):
-                return False
-        return True
+    claimed_ranks = _rank_numbers(body)
+    if claimed_ranks and not claimed_ranks <= _rank_numbers(source or ""):
+        return False
+    if claimed_ranks:
+        body = _RANK_MARK.sub(" ", body)
     claim_tokens = {token for token in tokens(body) if len(token) >= 2}
     if not claim_tokens:
         return False
@@ -455,8 +488,14 @@ def citation_supports(claim: str, source: str) -> bool:
 def drop_unsupported_citations(text: str, citations: list[dict[str, Any]]) -> str:
     """Drop [n] that the excerpt does not support, and drop the sentence if none remain."""
     by_n = {int(item["n"]): item for item in citations if isinstance(item.get("n"), int)}
-    cleaned_lines: list[str] = []
+    lines: list[str] = []
     for line in (text or "").split("\n"):
+        if lines and _CITE_ONLY.match(line):
+            lines[-1] += line
+            continue
+        lines.append(line)
+    cleaned_lines: list[str] = []
+    for line in lines:
         if any(mark in line for mark in _KEEP_LINE):
             cleaned_lines.append(line)
             continue
@@ -490,7 +529,7 @@ def drop_unsupported_citations(text: str, citations: list[dict[str, Any]]) -> st
 def ensure_score_notice(query: str, text: str, items: list[Evidence]) -> str:
     if not ranking_requested(query):
         return text
-    if any(_SCORE.search(item.text or "") for item in items):
+    if _has_score(text) or any(_has_score(item.text) for item in items):
         return text
     if any(phrase in (text or "") for phrase in ("没有实时评分", "没有评分", "没有口碑")):
         return text
@@ -498,6 +537,10 @@ def ensure_score_notice(query: str, text: str, items: list[Evidence]) -> str:
     if not base:
         return NO_LIVE_SCORE
     return f"{base}\n{NO_LIVE_SCORE}"
+
+
+def _has_score(text: str) -> bool:
+    return bool(_HAS_SCORE.search(text or ""))
 
 
 def ensure_external_limits(query: str, text: str, items: list[Evidence]) -> str:
@@ -550,9 +593,28 @@ def _drop_invented_scores(text: str, items: list[Evidence]) -> str:
 
 
 def _sentence_pieces(line: str) -> list[str]:
-    parts = [part for part in re.split(r"(?<=[。！？])", line or "") if part]
+    """Split on 。！？ and newlines outside 「」 “” and straight quotes."""
+    text = line or ""
+    parts: list[str] = []
+    start = 0
+    closers: list[str] = []
+    for index, char in enumerate(text):
+        if closers and char == closers[-1]:
+            closers.pop()
+            continue
+        opener = _OPEN_QUOTES.get(char)
+        if opener and (not closers or opener != char):
+            closers.append(opener)
+            continue
+        if not closers and char in "。！？\n":
+            parts.append(text[start : index + 1])
+            start = index + 1
+    if start < len(text):
+        parts.append(text[start:])
     merged: list[str] = []
     for part in parts:
+        if not part:
+            continue
         if merged and _CITE_ONLY.match(part):
             merged[-1] += part
             continue
@@ -560,61 +622,90 @@ def _sentence_pieces(line: str) -> list[str]:
     return merged
 
 
-def explicit_rank_entries(text: str) -> list[tuple[int, str, int | None]]:
-    """Ranks the excerpt actually writes, such as 「1.」「TOP1」 or 「第一名」."""
-    matches = list(_EXPLICIT_RANK.finditer(text or ""))
-    entries: list[tuple[int, str, int | None]] = []
-    seen: set[int] = set()
-    for index, match in enumerate(matches):
-        rank = _rank_number(match.group(1) or match.group(2) or match.group(3) or "")
-        if rank <= 0 or rank in seen:
+def _rank_numbers(text: str) -> set[int]:
+    """Ranks written as 第N名, TOP N, or NO.N. Numbered lists like 「1.」 are not ranks."""
+    found: set[int] = set()
+    for match in _RANK_MARK.finditer(text or ""):
+        raw = next(group for group in match.groups() if group)
+        if raw.isdigit():
+            found.add(int(raw))
             continue
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text or "")
-        span = (text or "")[match.end() : end]
-        name = _entry_name(span)
-        if len(name) < 2:
-            continue
-        seen.add(rank)
-        entries.append((rank, name, _entry_price(span)))
-    return entries
+        number = _CN_RANK.get(raw)
+        if number:
+            found.add(number)
+    return found
 
 
-def format_rank_block(query: str, items: list[Evidence]) -> str:
-    """Render list articles without turning excerpt order into a rank."""
-    cap = budget_limit(query)
-    lines: list[str] = []
-    for item in items:
-        if not _is_list_article(item, query):
-            continue
-        label = _list_label(item.title)
-        ranked = explicit_rank_entries(item.text)
-        if ranked:
-            for rank, name, price in ranked:
-                if cap is not None and price is not None and price > cap:
-                    lines.append(f"超出预算未列入：{name}（人均{price}）。")
-                    continue
-                shown = _with_price_flag(name, price, cap)
-                lines.append(f"据《{label}》榜单第{rank}名：{shown}。[{item.n}]")
-            continue
-        entries = _unranked_entries(item.text)
-        if len(entries) < 2:
-            continue
-        kept: list[str] = []
-        for name, price in entries:
-            if cap is not None and price is not None and price > cap:
-                lines.append(f"超出预算未列入：{name}（人均{price}）。")
-                continue
-            kept.append(_with_price_flag(name, price, cap))
-        if kept:
-            lines.append(f"{label}榜单收录了：{'、'.join(kept)}（来源未标名次）。[{item.n}]")
-    return "\n".join(lines)
-
-
-def budget_limit(text: str) -> int | None:
+def price_cap(text: str) -> int | None:
+    """人均N以内 wins. 价格亲民 means 150 yuan per person."""
     match = _BUDGET.search(text or "")
-    if match is None:
-        return None
-    return int(match.group(1))
+    if match is not None:
+        return int(match.group(1))
+    if "价格亲民" in (text or ""):
+        return AFFORDABLE_CAP
+    return None
+
+
+def apply_price_constraint(query: str, text: str, items: list[Evidence]) -> str:
+    cap = price_cap(query)
+    if cap is None:
+        return text
+    labels: list[str] = []
+    for item in items:
+        for label in _over_cap_labels(item.text or "", cap):
+            if label not in labels:
+                labels.append(label)
+    kept = [line for line in (text or "").splitlines() if not _line_over_cap(line, cap)]
+    body = "\n".join(kept).strip()
+    assumption = f"按人均{cap}元以内筛选。"
+    if assumption not in body:
+        body = _join(assumption, body)
+    if labels:
+        note = f"已排除高于人均{cap}元的：{'、'.join(labels)}。"
+        if note not in body:
+            body = _join(body, note)
+    return body
+
+
+def flag_stale_sources(text: str, items: list[Evidence]) -> str:
+    notes: list[str] = []
+    for item in items:
+        years = [year for year in listed_years(f"{item.title}\n{item.text}") if year <= STALE_YEAR]
+        if not years:
+            continue
+        note = f"《{item.title}》为{min(years)}年资料，可能已过时。"
+        if note not in (text or "") and note not in notes:
+            notes.append(note)
+    if not notes:
+        return text
+    return _join(text, "\n".join(notes))
+
+
+def listed_years(text: str) -> list[int]:
+    return [int(match.group(1)) for match in _YEAR.finditer(text or "")]
+
+
+def prefer_recent(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recent years first, undated hits next, years through 2019 last."""
+
+    def sort_key(pair: tuple[int, dict[str, Any]]) -> tuple[int, int, int]:
+        index, hit = pair
+        years = listed_years(f"{hit.get('title') or ''} {hit.get('text') or ''}")
+        recent = [year for year in years if year > STALE_YEAR]
+        old = [year for year in years if year <= STALE_YEAR]
+        if recent:
+            return (0, -max(recent), index)
+        if old:
+            return (2, min(old), index)
+        return (1, 0, index)
+
+    ordered = sorted(enumerate(hits), key=sort_key)
+    result: list[dict[str, Any]] = []
+    for position, (_index, hit) in enumerate(ordered, start=1):
+        copied = dict(hit)
+        copied["position"] = position
+        result.append(copied)
+    return result
 
 
 def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[str, str]]:
@@ -627,11 +718,14 @@ def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[st
     if ranking_requested(query) or any(_is_list_article(item, query) for item in items):
         system += (
             "用户要的是排名、榜单或 top。"
-            "只有摘录里出现「1.」「TOP1」「第一名」这类名次标记时，才写成「据X榜单第N名」，并引用那篇文章。"
-            "标题像榜单但摘录没有名次时，写成「X榜单收录了：A、B、C（来源未标名次）」，不要把原文顺序当成名次。"
-            "如果摘录里没有实时评分或口碑分数，要明确写出没有。"
-            "用户给了人均预算时，超过预算的不要列入，摘录没写价格的要标价格未知。"
+            "只有摘录里逐字出现「第N名」「TOP N」或「NO.N」时才能写名次，并引用那篇摘录。"
+            "「1.」这种序号不是名次。摘录没有这些标记时不要写第几名，也不要把原文顺序当成名次。"
+            "如果摘录和回答里都没有实时评分或口碑分数，要明确写出没有。"
         )
+    cap = price_cap(query)
+    if cap is not None:
+        system += f"价格按人均{cap}元以内筛选。回答里要写明「按人均{cap}元以内筛选」。超过这个上限的不要列入。"
+    system += "摘录里写了2019年或更早的年份时，要标明资料可能已过时。"
     if wants_dianping(query):
         system += (
             "用户要大众点评分数。不能抓取大众点评，也不要编造分数。"
@@ -844,7 +938,7 @@ def _cited_sentences(text: str) -> list[str]:
     for line in (text or "").split("\n"):
         if any(mark in line for mark in _KEEP_LINE):
             continue
-        for part in re.split(r"[。！？]", line):
+        for part in _sentence_pieces(line):
             part = part.strip()
             if part and _CITE.search(part):
                 found.append(part)
@@ -854,63 +948,44 @@ def _cited_sentences(text: str) -> list[str]:
 def _is_list_article(item: Evidence, query: str) -> bool:
     if _LIST_TITLE.search(item.title or ""):
         return True
-    if ranking_requested(query) and (explicit_rank_entries(item.text) or "·" in (item.text or "")):
+    if ranking_requested(query) and (_rank_numbers(item.text) or "·" in (item.text or "")):
         return True
     return False
 
 
-def _list_label(title: str) -> str:
-    label = re.sub(r"\s+", "", title or "").strip("《》")
-    return label or "该来源"
-
-
-def _rank_number(raw: str) -> int:
-    text = (raw or "").strip()
-    if text.isdigit():
-        return int(text)
-    return _CN_RANK.get(text, 0)
-
-
-def _unranked_entries(text: str) -> list[tuple[str, int | None]]:
-    parts = [part.strip() for part in re.split(r"\s*[·•|]\s*", text or "") if part.strip()]
-    if len(parts) < 2:
-        return []
-    entries: list[tuple[str, int | None]] = []
-    seen: set[str] = set()
-    for part in parts:
-        if explicit_rank_entries(part):
+def _over_cap_labels(text: str, cap: int) -> list[str]:
+    labels: list[str] = []
+    for part in re.split(r"[·•|\n。；;]", text or ""):
+        if "按人均" in part or "已排除" in part or "年" in part and not _MONEY.search(part):
             continue
-        name = _entry_name(part)
-        if len(name) < 2 or name in seen:
+        overs = [(raw, value) for raw, value in _money_values(part) if value > cap]
+        if not overs:
             continue
-        seen.add(name)
-        entries.append((name, _entry_price(part)))
-    return entries
+        name = part
+        for raw, _value in _money_values(part):
+            name = name.replace(raw, "", 1)
+        name = re.sub(r"\s+", "", name)
+        name = re.sub(r"[0-9]{4}\s*年", "", name)
+        name = name.strip(" ，,、:：[]（）()·•-—")
+        for raw, _value in overs:
+            label = f"{name}{raw}" if name else raw
+            if label not in labels:
+                labels.append(label)
+    return labels
 
 
-def _entry_name(span: str) -> str:
-    piece = re.split(r"[。；;\n]", span or "")[0]
-    if "：" in piece:
-        piece = piece.split("：")[-1]
-    if ":" in piece:
-        piece = piece.split(":")[-1]
-    piece = _PRICE.sub("", piece)
-    piece = re.sub(r"\d+\s*元", "", piece)
-    piece = re.sub(r"\s+", "", piece).strip(" ，,、:：·•-—")
-    return piece[:24]
+def _money_values(text: str) -> list[tuple[str, int]]:
+    found: list[tuple[str, int]] = []
+    for match in _MONEY.finditer(text or ""):
+        raw_value = next(group for group in match.groups() if group)
+        found.append((match.group(0).strip(), int(raw_value)))
+    return found
 
 
-def _entry_price(span: str) -> int | None:
-    match = _PRICE.search(span or "")
-    if match is None:
-        return None
-    return int(match.group(1))
-
-
-def _with_price_flag(name: str, price: int | None, cap: int | None) -> str:
-    if cap is not None and price is None:
-        return f"{name}（价格未知）"
-    return name
+def _line_over_cap(line: str, cap: int) -> bool:
+    if any(mark in line for mark in ("按人均", "已排除", "可能已过时", NO_CITATIONS)):
+        return False
+    return any(value > cap for _raw, value in _money_values(line))
 
 
 def _join(left: str, right: str) -> str:

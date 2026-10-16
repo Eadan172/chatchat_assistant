@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from app.ask.redact import install_redaction
-from app.ask.synthesize import synthesize
-from app.clarifier.design_tree import vague_food_query
+from app.ask.synthesize import normalize_url, prefer_recent, synthesize
+from app.clarifier.design_tree import specified_food_query, vague_food_query
 from app.clarifier.session import (
     ClarifyError,
     answer_session,
@@ -85,8 +85,9 @@ def iter_ask(
         return
 
     plan = decide(text, brief=None, kb_name=name, clarify=clarify)
-    probe = vague_food_query(text)
-    if clarify != "skip" and (_wants_clarify(plan, clarify) or probe):
+    specified = specified_food_query(text)
+    probe = vague_food_query(text) and not specified
+    if clarify != "skip" and not specified and (_wants_clarify(plan, clarify) or probe):
         view = start_session(
             db,
             keyword=text,
@@ -172,10 +173,10 @@ def _search_and_answer(
     plan = decide(question, brief=brief, kb_name=kb_name, clarify=routed_clarify)
     sources = [name for name in SOURCE_ORDER if name in plan.sources]
     queries = [item.strip() for item in plan.queries if item and item.strip()]
-    if question and question not in queries:
-        queries.insert(0, question)
-    if question == message and message.strip() and message.strip() not in queries:
-        queries.append(message.strip())
+    if not _clarified(brief):
+        original = (message or "").strip()
+        if original and original not in queries:
+            queries.append(original)
     queries = queries[:3] or [question or message]
     yield "searching", {"sources": sources, "queries": queries, "backend": plan.backend, "fallback": plan.fallback}
     logger.info("ask search sources=%s backend=%s query_count=%s", ",".join(sources), plan.backend, len(queries))
@@ -276,11 +277,35 @@ def _retrieve(
         if notice:
             notices.append(notice)
     if "web" in sources:
-        found = search_web(queries[0])
-        groups["web"] = enrich_web_hits(found.hits)
-        if found.notice:
-            notices.append(found.notice)
+        hits, web_notices = _search_web(queries)
+        groups["web"] = hits
+        notices.extend(web_notices)
     return groups, notices
+
+
+def _search_web(queries: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Search each short query and merge hits, dropping duplicate URLs."""
+    from app.web_search.live import NO_WEB_RESULT
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    notices: list[str] = []
+    for query in queries:
+        found = search_web(query)
+        if found.notice and found.notice not in notices:
+            notices.append(found.notice)
+        batch: list[str] = []
+        for hit in found.hits:
+            url = normalize_url(str(hit.get("url") or "")) or str(hit.get("url") or "").strip()
+            if url and url in seen:
+                continue
+            if url:
+                batch.append(url)
+            merged.append(hit)
+        seen.update(batch)
+    if merged:
+        notices = [note for note in notices if note != NO_WEB_RESULT]
+    return enrich_web_hits(prefer_recent(merged)), notices
 
 
 def _search_local(queries: list[str], *, brief: dict[str, Any] | None, mode: str, registry) -> list[dict[str, Any]]:
