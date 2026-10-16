@@ -306,7 +306,7 @@ def public_citation(item: Evidence) -> dict[str, Any]:
         "source_kind": item.source_kind,
         "platform": item.platform,
         "freshness_state": item.freshness_state,
-        "score": item.score,
+        "score": round(float(item.score), 6),
         "item_id": item.item_id,
         "chunk_id": item.chunk_id,
         "origins": [
@@ -368,7 +368,7 @@ def _evidence(number: int, members: list[dict[str, Any]], score: float) -> Evide
         source_kind=str(display.get("source_kind") or _kind(str(display.get("source") or "local"))),
         platform=str(display.get("platform") or _platform(str(display.get("source") or "local"))),
         freshness_state=_rollup_state(members),
-        score=round(float(score), 6),
+        score=float(score),
         item_id=_optional_int(display.get("item_id")),
         chunk_id=_optional_int(display.get("chunk_id")),
         origins=origins,
