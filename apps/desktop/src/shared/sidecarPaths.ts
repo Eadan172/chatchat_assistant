@@ -9,7 +9,13 @@ export function allowedSidecarPath(method: string, requestPath: string): boolean
   if (pathOnly === '/decision/logs') return method === 'GET'
   if (pathOnly === '/decision/shadow') return method === 'POST'
   if (pathOnly === '/library/items') return method === 'GET'
-  if (pathOnly === '/library/import' || pathOnly === '/index/rebuild' || pathOnly === '/search' || pathOnly === '/verify') {
+  if (
+    pathOnly === '/library/import' ||
+    pathOnly === '/index/rebuild' ||
+    pathOnly === '/search' ||
+    pathOnly === '/verify' ||
+    pathOnly === '/ask'
+  ) {
     return method === 'POST'
   }
   if (/^\/verify\/\d+$/.test(pathOnly)) return method === 'GET'
@@ -19,7 +25,7 @@ export function allowedSidecarPath(method: string, requestPath: string): boolean
   if (pathOnly === '/connectors/ima/search' || pathOnly === '/connectors/ima/import') return method === 'POST'
   if (/^\/connectors\/\d+\/status$/.test(pathOnly)) return method === 'GET'
   if (/^\/connectors\/\d+\/sync$/.test(pathOnly)) return method === 'POST'
-  if (pathOnly === '/settings/ima') return method === 'GET' || method === 'POST'
+  if (pathOnly === '/settings/ima' || pathOnly === '/settings/ask') return method === 'GET' || method === 'POST'
   if (
     pathOnly === '/chat' ||
     pathOnly === '/clarify/start' ||

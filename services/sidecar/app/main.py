@@ -12,7 +12,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import chat, clarify, collect, connectors, decision, indexing, library, search, settings, stats, verify
+import app.decision.deepseek  # noqa: F401  registers the DeepSeek decision backend
+from app.api import ask, chat, clarify, collect, connectors, decision, indexing, library, search, settings, stats, verify
 from app.db.session import SIDECAR_ROOT, close_db, init_db
 from app.llm.registry import ProviderRegistry
 
@@ -52,6 +53,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
+app.include_router(ask.router, prefix="/ask", tags=["ask"])
 app.include_router(collect.router, prefix="/collect", tags=["collect"])
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(library.router, prefix="/library", tags=["library"])

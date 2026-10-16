@@ -6,15 +6,20 @@ flag is on, are stored in a local file outside SQLite.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.connectors import ima_enabled
+from app.ask.flags import ask_enabled
+from app.ask.secrets import public_status, update_secrets
 from app.connectors.ima_client import BAD_KEY_MESSAGE, MISSING_KEY_MESSAGE, PATH_SEARCH_KNOWLEDGE_BASE, ImaClient, ImaError
 from app.connectors.ima_secrets import clear_saved_credentials, configured, credential_source, save_credentials
 from app.decision.shadow import load_settings, update_settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class DecisionSettingsIn(BaseModel):
@@ -91,6 +96,33 @@ def set_decision_settings(body: DecisionSettingsIn) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class AskSettingsIn(BaseModel):
+    deepseek_api_key: str | None = None
+    serper_api_key: str | None = None
+    serpapi_api_key: str | None = None
+    tavily_api_key: str | None = None
+
+
+def _ask_guard() -> None:
+    if not ask_enabled():
+        raise HTTPException(status_code=501, detail="not implemented")
+
+
+@router.get("/settings/ask")
+def get_ask_settings() -> dict:
+    _ask_guard()
+    return public_status()
+
+
+@router.post("/settings/ask")
+def set_ask_settings(body: AskSettingsIn) -> dict:
+    _ask_guard()
+    provided = body.model_dump(exclude_unset=True)
+    saved = update_secrets(provided)
+    logger.info("ask secrets updated")
+    return saved
 
 
 @router.get("/providers")

@@ -22,6 +22,10 @@ describe('sidecar path allowlist', () => {
 
   it('still allows chat and clarify, and blocks other routes', () => {
     expect(allowedSidecarPath('POST', '/chat')).toBe(true)
+    expect(allowedSidecarPath('POST', '/ask')).toBe(true)
+    expect(allowedSidecarPath('GET', '/settings/ask')).toBe(true)
+    expect(allowedSidecarPath('POST', '/settings/ask')).toBe(true)
+    expect(allowedSidecarPath('GET', '/ask')).toBe(false)
     expect(allowedSidecarPath('GET', '/clarify/active')).toBe(true)
     expect(allowedSidecarPath('POST', '/clarify/12/answer')).toBe(true)
     expect(allowedSidecarPath('POST', '/verify')).toBe(true)

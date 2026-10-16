@@ -1,3 +1,15 @@
+export interface CitationOrigin {
+  source?: string
+  source_kind?: string
+  platform?: string
+  title?: string
+  filename?: string
+  url?: string
+  text?: string
+  freshness_state?: string
+  external_id?: string
+}
+
 export interface Citation {
   n?: number
   chunk_id?: number
@@ -7,10 +19,12 @@ export interface Citation {
   filename?: string
   url?: string
   text?: string
+  source?: string
   source_kind?: string
   platform?: string
   freshness_state?: string
   score?: number
+  origins?: CitationOrigin[]
 }
 
 export function sourceBadge(citation: Citation): string | null {

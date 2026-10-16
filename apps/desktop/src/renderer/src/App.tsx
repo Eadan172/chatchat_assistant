@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { flagEnabled } from '../../shared/features'
+import { AskSettings } from './components/ask/AskSettings'
 import { ChatPanel } from './components/chat/ChatPanel'
 import { ClarifyPanel } from './components/clarify/ClarifyPanel'
 import { DecisionSettings } from './components/decision/DecisionSettings'
@@ -16,6 +17,7 @@ const clarifyOn = flagEnabled('clarify', import.meta.env.VITE_FEATURE_CLARIFY)
 const jevOn = flagEnabled('jev', import.meta.env.VITE_FEATURE_JEV)
 const verifyOn = flagEnabled('verify', import.meta.env.VITE_FEATURE_VERIFY)
 const imaOn = flagEnabled('ima', import.meta.env.VITE_FEATURE_IMA)
+const askOn = flagEnabled('ask', import.meta.env.VITE_FEATURE_ASK)
 
 export function App() {
   const [health, setHealth] = useState<HealthState | null>(null)
@@ -43,6 +45,7 @@ export function App() {
       data-jev={String(jevOn)}
       data-verify={String(verifyOn)}
       data-ima={String(imaOn)}
+      data-ask={String(askOn)}
     >
       <div className="mx-auto max-w-6xl px-6 py-8">
         <header className="flex flex-wrap items-end justify-between gap-4">
@@ -59,8 +62,9 @@ export function App() {
         {imaOn ? <ImaPanel /> : null}
         <div className="mt-6 grid items-start gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
           <LibraryPanel verifyOn={verifyOn} />
-          <ChatPanel verifyOn={verifyOn} imaOn={imaOn} />
+          <ChatPanel verifyOn={verifyOn} imaOn={imaOn} askOn={askOn} />
         </div>
+        {askOn ? <AskSettings /> : null}
         {clarifyOn ? <ClarifyPanel /> : null}
         {jevOn ? <DecisionSettings /> : null}
       </div>

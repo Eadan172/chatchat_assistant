@@ -44,13 +44,14 @@ only — response bodies were not read for content)
   ``role_type``, ``base_type``. There is no ``id`` and no ``name``. The skill
   schema that says ``id`` / ``name`` does not match the live list.
 * ``search_knowledge`` with that ``kb_id`` as ``knowledge_base_id`` is HTTP
-  200, ``code`` 0. ``data`` contains only ``info_list`` (0 items on that
-  call, so fields inside a hit are still unconfirmed). An empty
+  200, ``code`` 0. ``data.info_list[]`` items use ``media_id``, ``title``,
+  ``parent_folder_id``, ``highlight_content``, and ``media_type``. An empty
   ``knowledge_base_id`` returns business ``code`` 220004
   ``invalid knowledge_base_id``.
 * ``search_note`` with ``search_type`` 1, ``query_info.content``, ``start``,
   and ``end`` is HTTP 200, ``code`` 0. The list key is ``search_note_infos``.
-  Fields inside each note were not inspected.
+  Each item's outer fields are ``note_book_info`` and ``highlightInfo``.
+  Keys inside those two objects are still read with fallbacks.
 * A wrong API key is HTTP 401. This client maps HTTP 401/403, and business
   codes ``20004`` / ``110030``, to the user-facing message 凭据无效.
 

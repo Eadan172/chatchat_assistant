@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { features, flagEnabled } from './features'
 
 describe('feature flags', () => {
-  it('keeps clarify, jev, verify, and ima off by default', () => {
+  it('keeps clarify, jev, verify, ima, and ask off by default', () => {
     expect(features.clarify).toBe(false)
     expect(features.jev).toBe(false)
     expect(features.verify).toBe(false)
     expect(features.ima).toBe(false)
+    expect(features.ask).toBe(false)
     expect(flagEnabled('clarify')).toBe(false)
     expect(flagEnabled('ima')).toBe(false)
+    expect(flagEnabled('ask')).toBe(false)
   })
 
   it('lets an explicit override turn clarify on', () => {
