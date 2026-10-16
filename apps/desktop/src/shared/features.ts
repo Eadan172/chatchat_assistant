@@ -4,6 +4,7 @@
  * jev: set VITE_FEATURE_JEV=true to mount decision-layer settings.
  * verify: set VITE_FEATURE_VERIFY=true to show 查证 and auto-verify.
  * ima: set VITE_FEATURE_IMA=true to mount the Tencent ima connector.
+ * ask: set VITE_FEATURE_ASK=true to mount the end-to-end ask flow.
  * The values in this object stay false.
  */
 export const features: {
@@ -11,11 +12,13 @@ export const features: {
   jev: boolean
   verify: boolean
   ima: boolean
+  ask: boolean
 } = {
   clarify: false,
   jev: false,
   verify: false,
   ima: false,
+  ask: false,
 }
 
 export function flagEnabled(name: keyof typeof features, override?: string | boolean): boolean {

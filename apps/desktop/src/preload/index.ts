@@ -21,7 +21,16 @@ const desktop = {
       ipcRenderer.removeListener(channel, listener)
     })
   },
+  streamAsk: (body: unknown, onEvent: (event: { event: string; data: unknown }) => void) => {
+    const channel = `ask-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+    const listener = (_event: unknown, payload: { event: string; data: unknown }) => onEvent(payload)
+    ipcRenderer.on(channel, listener)
+    return ipcRenderer.invoke('sidecar:stream', { path: '/ask', body, channel }).finally(() => {
+      ipcRenderer.removeListener(channel, listener)
+    })
+  },
   openPath: (target: string) => ipcRenderer.invoke('shell:openPath', target),
+  openExternal: (target: string) => ipcRenderer.invoke('shell:openExternal', target),
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

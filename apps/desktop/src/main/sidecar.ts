@@ -85,6 +85,7 @@ export async function startSidecar(): Promise<string> {
       // The renderer reads VITE_FEATURE_*. Pass the same switches to Python.
       FEATURE_VERIFY: flagValue('FEATURE_VERIFY'),
       FEATURE_IMA: flagValue('FEATURE_IMA'),
+      FEATURE_ASK: flagValue('FEATURE_ASK'),
     },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],

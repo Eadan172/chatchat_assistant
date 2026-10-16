@@ -39,12 +39,26 @@ ipcMain.handle(
   'sidecar:stream',
   async (event, payload: { path?: string; body?: unknown; channel?: string }) => {
     const channel = String(payload?.channel || '')
-    if (!/^chat-\d+-\d+$/.test(channel)) return { ok: false, status: 0, error: 'bad channel' }
+    if (!/^(chat|ask)-\d+-\d+$/.test(channel)) return { ok: false, status: 0, error: 'bad channel' }
     return streamSidecar(String(payload?.path || '/chat'), payload?.body, (item) => {
       if (!event.sender.isDestroyed()) event.sender.send(channel, item)
     })
   },
 )
+
+ipcMain.handle('shell:openExternal', async (_event, target: unknown) => {
+  let parsed: URL
+  try {
+    parsed = new URL(String(target || ''))
+  } catch {
+    return { ok: false, error: 'url not allowed' }
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, error: 'url not allowed' }
+  }
+  await shell.openExternal(parsed.toString())
+  return { ok: true }
+})
 
 ipcMain.handle('shell:openPath', async (_event, target: unknown) => {
   const root = path.resolve(app.getPath('userData'), 'library')

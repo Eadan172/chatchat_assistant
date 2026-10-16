@@ -199,6 +199,31 @@ def list_children(
     }
 
 
+def find_knowledge_base(client: ImaClient, name: str) -> dict[str, str] | None:
+    """Match ``kb_name`` to ``kb_id``. Listing with an empty query is the confirmed call."""
+    wanted = name.strip()
+    if not wanted:
+        return None
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for query in (wanted, ""):
+        listed = client.post(PATH_SEARCH_KNOWLEDGE_BASE, {"query": query, "cursor": "", "limit": 20})
+        for item in _named_list(listed.data, "info_list"):
+            kb_id = knowledge_base_id_of(item)
+            kb_name = knowledge_base_name_of(item)
+            if not kb_id or not kb_name or kb_id in seen:
+                continue
+            seen.add(kb_id)
+            found.append({"id": kb_id, "name": kb_name})
+    for base in found:
+        if base["name"] == wanted:
+            return base
+    partial = [base for base in found if wanted in base["name"] or base["name"] in wanted]
+    if len(partial) == 1:
+        return partial[0]
+    return None
+
+
 def search(client: ImaClient, query: str, *, knowledge_base_id: str | None = None) -> dict[str, Any]:
     text = query.strip()
     if not text:
@@ -499,6 +524,8 @@ def _split_knowledge(entries: list[dict[str, Any]], knowledge_base_id: str) -> t
                 "title": _text(entry, "title", "name", "file_name") or "未命名文件",
                 "snippet": _text(entry, "highlight_content", "highlight", "snippet", "summary"),
                 "knowledge_base_id": knowledge_base_id,
+                "media_type": entry.get("media_type", entry.get("mediaType")),
+                "parent_folder_id": _text(entry, "parent_folder_id", "parentFolderId"),
             }
         )
     return folders, items
@@ -527,6 +554,11 @@ def _knowledge_base_details(client: ImaClient, ids: list[str]) -> dict[str, dict
 
 
 def _note_fields(entry: dict[str, Any]) -> dict[str, str] | None:
+    """Read a search_note hit.
+
+    Live items put the note under ``note_book_info`` and the highlight under
+    ``highlightInfo``. Older flat shapes stay accepted.
+    """
     info = _nested(entry, "note_book_info", "noteBookInfo", "note_info", "note") or entry
     note_id = _text(info, "note_id", "doc_id", "docid", "id") or _text(entry, "note_id", "doc_id", "docid", "id")
     if not note_id:
@@ -534,12 +566,30 @@ def _note_fields(entry: dict[str, Any]) -> dict[str, str] | None:
     highlight = _nested(entry, "highlightInfo", "highlight_info") or {}
     title = _text(info, "title", "name") or _strip_em(_text(highlight, "doc_title")) or "未命名笔记"
     summary = _text(info, "summary", "abstract")
-    snippet = _strip_em(
-        _text(highlight, "doc_title", "highlight_content", "content")
-        or _text(entry, "highlight_content", "highlight", "snippet")
-        or summary
-    )
+    snippet = _highlight_text(entry) or summary
     return {"id": note_id, "title": title, "summary": summary, "snippet": snippet}
+
+
+def _highlight_text(entry: dict[str, Any]) -> str:
+    raw: Any = None
+    for key in ("highlightInfo", "highlight_info"):
+        if key in entry:
+            raw = entry.get(key)
+            break
+    parts: list[str] = []
+    if isinstance(raw, dict):
+        parts.append(_text(raw, "highlight_content", "content", "snippet", "text", "abstract", "doc_title"))
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                parts.append(_text(item, "highlight_content", "content", "snippet", "text", "doc_title"))
+            elif isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+    elif isinstance(raw, str) and raw.strip():
+        parts.append(raw.strip())
+    if not any(parts):
+        parts.append(_text(entry, "highlight_content", "highlight", "snippet"))
+    return _strip_em(" ".join(part for part in parts if part))
 
 
 def _media_id_of(entry: dict[str, Any]) -> str:
