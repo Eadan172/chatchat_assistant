@@ -7,7 +7,7 @@ a failed model call falls back to the rule decider and a grouped list.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from app.ask.redact import install_redaction
@@ -26,6 +26,7 @@ from app.decision.policies import need_clarify, route_channels
 from app.freshness.policies import apply_chat_freshness, verify_enabled
 from app.retrieval.hybrid import scope_text
 from app.web_search.live import search_web
+from app.web_search.page import enrich_web_hits
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class Plan:
     queries: list[str]
     backend: str
     fallback: str | None = None
+    ambiguities: list[dict[str, Any]] = field(default_factory=list)
 
 
 def iter_ask(
@@ -89,6 +91,7 @@ def iter_ask(
             domain_hint=None,
             skip=False,
             max_questions=ASK_CLARIFY_LIMIT,
+            ambiguities=plan.ambiguities,
         )
         yield from _clarify_events(view)
         return
@@ -132,6 +135,7 @@ def decide(message: str, *, brief: dict[str, Any] | None, kb_name: str, clarify:
                 sources=sources,
                 queries=list(raw["queries"]) or [message],
                 backend="deepseek",
+                ambiguities=list(raw.get("ambiguities") or []),
             )
         except DecisionUnavailable:
             logger.info("deepseek decision failed; using rule backend")
@@ -263,7 +267,7 @@ def _retrieve(
             notices.append(notice)
     if "web" in sources:
         found = search_web(queries[0])
-        groups["web"] = found.hits
+        groups["web"] = enrich_web_hits(found.hits)
         if found.notice:
             notices.append(found.notice)
     return groups, notices
@@ -324,12 +328,16 @@ def _search_ima(query: str, kb_name: str) -> tuple[list[dict[str, Any]], str | N
     hits: list[dict[str, Any]] = []
     for item in result.get("hits") or []:
         kind = str(item.get("kind") or "")
+        if kind == "folder":
+            continue
+        # Subscription rows often have no body (get_media_info 220030) and
+        # media_type 6 has no link. Do not copy the title into the excerpt.
         hits.append(
             {
                 "title": item.get("title") or "ima 条目",
                 "filename": "",
                 "url": "",
-                "text": item.get("snippet") or item.get("summary") or item.get("title") or "",
+                "text": item.get("snippet") or item.get("summary") or "",
                 "freshness_state": "unknown",
                 "platform": "ima",
                 "source_kind": "connector",
