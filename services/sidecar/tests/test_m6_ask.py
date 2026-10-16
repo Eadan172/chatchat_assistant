@@ -54,6 +54,17 @@ STATE = MockState()
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path.endswith("/article"):
+            self._record("GET", parsed.path, None)
+            paragraph = "第一性原理的页面正文提到亚里士多德与基本事实，并展开了后续论证。" * 8
+            body = (
+                "<html><head><script>var leaked = 'do-not-keep';</script>"
+                "<style>p{color:red}</style></head><body><article><p>"
+                + paragraph
+                + "</p></article></body></html>"
+            )
+            self._html(body)
+            return
         if parsed.path.endswith("/search.json"):
             self._record("GET", parsed.path, None)
             if STATE.serpapi_status >= 400:
@@ -258,6 +269,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json({"code": 110012, "msg": "接口无效", "data": {}}, status=200)
 
+    def _html(self, body: str, status: int = 200) -> None:
+        raw = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "text/html; charset=utf-8")
+        self.send_header("content-length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def _json(self, payload: dict, status: int = 200) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -309,6 +328,7 @@ def mock_server(monkeypatch: pytest.MonkeyPatch) -> str:
     STATE.serpapi_status = 200
     STATE.tavily_status = 200
     STATE.deepseek_status = 200
+    monkeypatch.setenv("ASK_WEB_FETCH_N", "0")
     monkeypatch.setenv("IMA_MIN_INTERVAL_S", "0")
     monkeypatch.setenv("IMA_MAX_PER_MINUTE", "1000")
     monkeypatch.setenv("IMA_CACHE_TTL_S", "0")
@@ -699,3 +719,252 @@ def test_grouped_answer_when_deepseek_is_down(
     assert clear.status_code == 200, clear.text
     body = joined_delta(parse_sse(clear.text))
     assert "未配置联网搜索密钥" in body or "DeepSeek" in body or "没有检索到" in body
+
+
+GUIDE_TITLE = "ima笔记使用指南"
+GUIDE_TEXT = "打开 ima 后点击新建笔记即可完成记录。"
+SUBSCRIPTION_TITLE = "订阅库量子周报"
+SNIPPET = "短摘要。"
+LONG_PAGE = "第一性原理的页面正文提到亚里士多德与基本事实，并展开了后续论证。" * 8
+
+
+def test_title_only_subscription_is_related_not_evidence() -> None:
+    captured: dict[str, str] = {}
+
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        captured["prompt"] = messages[-1]["content"]
+        return "第一性原理是一种思考方式。[1]\n有内容以订阅库量子周报为题。\n只有标题，没有正文。", 3, 4
+
+    groups = {
+        "ima": [
+            {
+                "title": SUBSCRIPTION_TITLE,
+                "text": SUBSCRIPTION_TITLE,
+                "ima_kind": "media",
+                "media_type": 6,
+                "source": "ima",
+                "external_id": "sub-1",
+            },
+            {
+                "title": "第一性原理入门",
+                "text": "",
+                "ima_kind": "note",
+                "source": "ima",
+                "external_id": "title-note",
+            },
+            {
+                "title": "原理笔记",
+                "text": NOTE_TEXT,
+                "ima_kind": "note",
+                "source": "ima",
+                "external_id": "note-1",
+            },
+            {
+                "title": GUIDE_TITLE,
+                "text": GUIDE_TEXT,
+                "ima_kind": "note",
+                "source": "ima",
+                "external_id": "guide",
+            },
+        ]
+    }
+    result = synthesize("第一性原理", groups, complete=complete)
+    head, _, tail = result.text.partition("相关条目")
+    assert tail
+    assert SUBSCRIPTION_TITLE in tail
+    assert "第一性原理入门" in tail
+    assert SUBSCRIPTION_TITLE not in head
+    assert "有内容以" not in result.text
+    assert "只有标题" not in result.text
+    assert GUIDE_TITLE not in result.text
+    assert "[1]" in head
+    assert "订阅库量子周报" not in captured["prompt"]
+    assert GUIDE_TITLE not in captured["prompt"]
+    assert "第一性原理入门" not in captured["prompt"]
+    assert NOTE_TEXT[:8] in captured["prompt"]
+    assert [item["title"] for item in result.citations] == ["原理笔记"]
+    assert result.citations[0]["n"] == 1
+
+    offline = synthesize("第一性原理", groups, missing_key=True)
+    offline_head, _, offline_tail = offline.text.partition("相关条目")
+    assert SUBSCRIPTION_TITLE in offline_tail
+    assert SUBSCRIPTION_TITLE not in offline_head
+    assert "有内容以" not in offline.text
+    assert "只有标题" not in offline.text
+    assert GUIDE_TITLE not in offline.text
+    assert all(item["title"] != SUBSCRIPTION_TITLE for item in offline.citations)
+    offline_blob = json.dumps(offline.citations, ensure_ascii=False)
+    assert GUIDE_TITLE not in offline_blob
+    assert "guide" not in offline_blob
+
+
+def test_citations_keep_only_used_numbers_and_drop_unrelated_notes() -> None:
+    captured: dict[str, str] = {}
+
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        captured["prompt"] = messages[-1]["content"]
+        return "先看丙。[3] 再看甲。[1] 编造。[99]", 2, 2
+
+    result = synthesize(
+        "第一性原理",
+        {
+            "web": [
+                {"title": "甲", "url": "https://example.com/a", "text": "甲的正文足够用来区分第一条。", "position": 1, "source": "web"},
+                {"title": "乙", "url": "https://example.com/b", "text": "乙的正文足够用来区分第二条。", "position": 2, "source": "web"},
+                {"title": "丙", "url": "https://example.com/c", "text": "丙的正文足够用来区分第三条。", "position": 3, "source": "web"},
+            ],
+            "ima": [
+                {
+                    "title": GUIDE_TITLE,
+                    "text": GUIDE_TEXT,
+                    "ima_kind": "note",
+                    "source": "ima",
+                    "external_id": "guide",
+                }
+            ],
+        },
+        complete=complete,
+    )
+    assert GUIDE_TITLE not in captured["prompt"]
+    assert GUIDE_TITLE not in result.text
+    assert "[99]" not in result.text
+    assert "[3]" not in result.text
+    assert result.text.index("[1]") < result.text.index("[2]")
+    assert "丙" in result.text.split("[1]", 1)[0]
+    assert [item["n"] for item in result.citations] == [1, 2]
+    assert [item["title"] for item in result.citations] == ["丙", "甲"]
+    assert all(item["title"] != "乙" for item in result.citations)
+    assert all(GUIDE_TITLE not in json.dumps(item, ensure_ascii=False) for item in result.citations)
+
+
+def test_fetched_page_body_is_longer_than_snippet(mock_server: str) -> None:
+    from app.web_search.page import enrich_web_hits, fetch_page_text
+
+    page = fetch_page_text(f"{mock_server}/article")
+    assert "第一性原理的页面正文" in page
+    assert len(page) > len(SNIPPET) + 200
+    assert "do-not-keep" not in page
+    assert "color:red" not in page
+    assert fetch_page_text(f"{mock_server}/missing") == ""
+
+    def run(text: str) -> tuple[str, str]:
+        seen: dict[str, str] = {}
+
+        def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+            seen["prompt"] = messages[-1]["content"]
+            excerpt = messages[-1]["content"].split("【问题】", 1)[0].strip()
+            return excerpt, 1, 1
+
+        result = synthesize(
+            "第一性原理",
+            {"web": [{"title": "甲", "url": "https://example.com/a", "text": text, "source": "web"}]},
+            complete=complete,
+        )
+        return result.text, seen["prompt"]
+
+    short_text, short_prompt = run(SNIPPET)
+    calls: list[str] = []
+
+    def fetch(url: str) -> str:
+        calls.append(url)
+        return LONG_PAGE
+
+    hits = [
+        {"title": "甲", "url": "https://example.com/a", "text": SNIPPET, "source": "web"},
+        {"title": "乙", "url": "https://example.com/b", "text": SNIPPET, "source": "web"},
+        {"title": "丙", "url": "", "text": SNIPPET, "source": "web", "media_type": 6},
+    ]
+    enriched = enrich_web_hits(hits, fetch=fetch, limit=1)
+    assert calls == ["https://example.com/a"]
+    assert len(enriched[0]["text"]) > len(SNIPPET) + 200
+    assert enriched[1]["text"] == SNIPPET
+    assert enriched[2]["text"] == SNIPPET
+    long_text, long_prompt = run(enriched[0]["text"])
+    assert "https://" not in long_prompt
+    assert "页面正文" not in short_text
+    assert "页面正文" not in short_prompt
+    assert len(long_prompt) > len(short_prompt) + 200
+    assert len(long_text) > len(short_text) + 200
+    assert "页面正文" in long_text
+
+    def boom(url: str) -> str:
+        raise RuntimeError("boom")
+
+    kept = enrich_web_hits(hits[:1], fetch=boom, limit=3)
+    assert kept[0]["text"] == SNIPPET
+
+    def complete_bad(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        return "页面说了这些。[1][8]", 1, 1
+
+    guarded = synthesize(
+        "第一性原理",
+        {"web": [{"title": "甲", "url": "https://example.com/a", "text": enriched[0]["text"], "source": "web"}]},
+        complete=complete_bad,
+    )
+    assert "[8]" not in guarded.text
+    assert "[1]" in guarded.text
+    assert len(guarded.citations) == 1
+    assert guarded.citations[0]["n"] == 1
+    assert "页面正文" in guarded.citations[0]["text"]
+    assert len(guarded.citations[0]["text"]) > len(SNIPPET) + 200
+
+
+def test_serper_failure_notice_names_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    mock_server: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.web_search.live import NO_WEB_RESULT, _failure_notice
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("SERPER_API_KEY", SERPER_KEY)
+    monkeypatch.setenv("SERPER_BASE_URL", f"{mock_server}/serper")
+    STATE.serper_status = 500
+    STATE.calls.clear()
+    caplog.set_level(logging.INFO)
+    found = search_web("第一性原理")
+    assert found.hits == []
+    assert found.notice
+    assert found.notice != NO_WEB_RESULT
+    assert "Serper" in found.notice
+    assert "500" in found.notice
+    assert "SerpApi" in found.notice
+    assert "Tavily" in found.notice
+    assert "未配置后备来源" in found.notice
+    assert SERPER_KEY not in found.notice
+    assert SERPER_KEY not in caplog.text
+
+    class _Provider:
+        def __init__(self, provider_id: str) -> None:
+            self.id = provider_id
+
+    assert _failure_notice([{"provider": "serper", "http_status": 200, "count": 0}], [_Provider("serper")]) == NO_WEB_RESULT
+
+    monkeypatch.setenv("SERPAPI_API_KEY", SERPAPI_KEY)
+    monkeypatch.setenv("TAVILY_API_KEY", TAVILY_KEY)
+    monkeypatch.setenv("SERPAPI_BASE_URL", f"{mock_server}/serpapi")
+    monkeypatch.setenv("TAVILY_BASE_URL", f"{mock_server}/tavily")
+    STATE.serper_status = 401
+    STATE.serpapi_status = 403
+    STATE.tavily_status = 500
+    STATE.calls.clear()
+    failed = search_web("第一性原理")
+    notice = failed.notice or ""
+    assert "Serper" in notice and "401" in notice
+    assert "SerpApi" in notice and "403" in notice
+    assert "Tavily" in notice and "500" in notice
+    assert "未配置" not in notice
+    for secret in (SERPER_KEY, SERPAPI_KEY, TAVILY_KEY):
+        assert secret not in notice
+
+
+def test_vector_note_filter_drops_unrelated_guide(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ask.select import note_is_relevant
+
+    monkeypatch.setenv("ASK_NOTE_FILTER", "vector")
+    monkeypatch.delenv("ASK_NOTE_RELEVANCE", raising=False)
+    assert note_is_relevant("第一性原理", "原理笔记", NOTE_TEXT)
+    assert not note_is_relevant("第一性原理", GUIDE_TITLE, GUIDE_TEXT)

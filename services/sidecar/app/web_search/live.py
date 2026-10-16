@@ -73,7 +73,25 @@ def search_web(query: str, *, limit: int = 5) -> WebSearchResult:
         logger.info("web %s http=%s count=%s host=%s", provider.id, status, len(hits), provider.host)
         if hits:
             return WebSearchResult(hits=hits, provider=provider.id, attempts=attempts)
-    return WebSearchResult(notice=NO_WEB_RESULT, attempts=attempts)
+    return WebSearchResult(notice=_failure_notice(attempts, providers), attempts=attempts)
+
+
+_NAMES = {"serper": "Serper", "serpapi": "SerpApi", "tavily": "Tavily"}
+
+
+def _failure_notice(attempts: list[dict[str, Any]], providers: list[Any]) -> str:
+    failed = [item for item in attempts if item.get("http_status") != 200]
+    if not failed:
+        return NO_WEB_RESULT
+    parts = "、".join(
+        f"{_NAMES.get(item['provider'], item['provider'])}（HTTP {item['http_status'] or '无响应'}）" for item in failed
+    )
+    configured = {item.id for item in providers}
+    missing = [_NAMES[name] for name in ("serper", "serpapi", "tavily") if name not in configured]
+    text = f"联网搜索失败：{parts}，请检查密钥。"
+    if missing:
+        text += f"未配置后备来源 {'、'.join(missing)}，本次回答仅基于知识库。"
+    return text
 
 
 def parse_hits(payload: dict[str, Any], *, list_keys: tuple[str, ...], link_keys: tuple[str, ...], provider: str) -> list[dict[str, Any]]:

@@ -8,9 +8,11 @@ order is reciprocal rank fusion, score = sum 1/(60+rank). Raw provider scores
 are not compared.
 
 DeepSeek sees only [n] and the excerpt. Citation numbers that were not given
-are removed after generation. When a knowledge-base claim and a web claim
-disagree, the answer states that the two sources differ and keeps both, with
-the M4 freshness label.
+are removed after generation, then the remaining numbers are rewritten to
+1..k in the order they appear. The citation list keeps only those numbers.
+Title-only ima rows are appended as 「相关条目」 and are not excerpts. When a
+knowledge-base claim and a web claim disagree, the answer states that the two
+sources differ and keeps both, with the M4 freshness label.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app.ask.select import append_related, prepare_ima, strip_empty_points
 from app.index.tokens import tokens
 from app.retrieval.hybrid import RRF_K, rrf_fuse
 
@@ -220,6 +223,37 @@ def guard_citations(text: str, valid: set[int]) -> str:
     return cleaned.strip()
 
 
+def align_citations(text: str, citations: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """Keep numbers that appear in the answer, in that order, rewritten from 1."""
+    by_n: dict[int, dict[str, Any]] = {}
+    for item in citations:
+        number = item.get("n")
+        if isinstance(number, int) and number not in by_n:
+            by_n[number] = item
+    order: list[int] = []
+    seen: set[int] = set()
+    for match in _CITE.finditer(text or ""):
+        number = int(match.group(1))
+        if number in by_n and number not in seen:
+            seen.add(number)
+            order.append(number)
+    mapping = {old: new for new, old in enumerate(order, start=1)}
+
+    def replace(match: re.Match[str]) -> str:
+        new = mapping.get(int(match.group(1)))
+        return f"[{new}]" if new else ""
+
+    cleaned = _CITE.sub(replace, text or "")
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    used: list[dict[str, Any]] = []
+    for old in order:
+        item = dict(by_n[old])
+        item["n"] = mapping[old]
+        used.append(item)
+    return cleaned.strip(), used
+
+
 def synthesize(
     query: str,
     groups: dict[str, list[dict[str, Any]]],
@@ -228,27 +262,37 @@ def synthesize(
     complete: Complete | None = None,
     missing_key: bool = False,
 ) -> Synthesis:
-    evidences = fuse_hits(groups, registry=registry)
+    ima_hits, related = prepare_ima(query, list(groups.get("ima") or []))
+    prepared = dict(groups)
+    prepared["ima"] = ima_hits
+    extra = list(groups.get("related") or [])
+    evidences = fuse_hits(prepared, registry=registry)
     citations = [public_citation(item) for item in evidences]
     conflicts = find_conflicts(evidences)
+    tail = [*related, *extra]
+
+    def finish(text: str, provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> Synthesis:
+        cleaned, used = align_citations(strip_empty_points(text), citations)
+        return Synthesis(
+            append_related(cleaned, tail),
+            provider,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            used,
+            bool(conflicts),
+        )
+
     if not evidences:
-        return Synthesis(NO_HITS, "offline", "grouped", 0, 0, [], False)
+        return finish(NO_HITS, "offline", "grouped", 0, 0)
     if missing_key or complete is None:
-        return Synthesis(grouped_text(query, evidences, conflicts, reason=GROUPED_NO_KEY), "offline", "grouped", 0, 0, citations, bool(conflicts))
+        return finish(grouped_text(query, evidences, conflicts, reason=GROUPED_NO_KEY), "offline", "grouped", 0, 0)
     try:
         raw, prompt_tokens, completion_tokens = complete(_messages(query, evidences, bool(conflicts)))
     except Exception:
-        return Synthesis(
-            grouped_text(query, evidences, conflicts, reason=GROUPED_FAILED),
-            "offline",
-            "grouped",
-            0,
-            0,
-            citations,
-            bool(conflicts),
-        )
+        return finish(grouped_text(query, evidences, conflicts, reason=GROUPED_FAILED), "offline", "grouped", 0, 0)
     text = _finalize(raw, evidences, conflicts)
-    return Synthesis(text, "deepseek", "deepseek-chat", prompt_tokens, completion_tokens, citations, bool(conflicts))
+    return finish(text, "deepseek", "deepseek-chat", prompt_tokens, completion_tokens)
 
 
 def grouped_text(query: str, items: list[Evidence], conflicts: list[tuple[Evidence, Evidence]], *, reason: str) -> str:
@@ -336,7 +380,7 @@ def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[st
             "知识库和网页的说法不一致。回答必须写明「两处来源说法不同」，"
             "并列双方摘录，不要选择其中一方，不要写应以哪边为准。"
         )
-    blocks = [f"[{item.n}] {_excerpt(item.text, 500)}" for item in items]
+    blocks = [f"[{item.n}] {_excerpt(item.text, prompt_excerpt_limit())}" for item in items]
     user = "【摘录】\n" + "\n\n".join(blocks) + f"\n\n【问题】{query}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -485,6 +529,15 @@ def _rollup_state(members: list[dict[str, Any]]) -> str:
     if "fresh" in states:
         return "fresh"
     return "unknown"
+
+
+def prompt_excerpt_limit() -> int:
+    raw = (os.getenv("ASK_EXCERPT_CHARS") or "1200").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1200
+    return min(max(value, 200), 4000)
 
 
 def _excerpt(text: str, limit: int) -> str:
