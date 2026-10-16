@@ -3,16 +3,19 @@
  * clarify: set VITE_FEATURE_CLARIFY=true to mount the clarifier.
  * jev: set VITE_FEATURE_JEV=true to mount decision-layer settings.
  * verify: set VITE_FEATURE_VERIFY=true to show 查证 and auto-verify.
+ * ima: set VITE_FEATURE_IMA=true to mount the Tencent ima connector.
  * The values in this object stay false.
  */
 export const features: {
   clarify: boolean
   jev: boolean
   verify: boolean
+  ima: boolean
 } = {
   clarify: false,
   jev: false,
   verify: false,
+  ima: false,
 }
 
 export function flagEnabled(name: keyof typeof features, override?: string | boolean): boolean {

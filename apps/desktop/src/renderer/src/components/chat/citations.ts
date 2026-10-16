@@ -8,8 +8,14 @@ export interface Citation {
   url?: string
   text?: string
   source_kind?: string
+  platform?: string
   freshness_state?: string
   score?: number
+}
+
+export function sourceBadge(citation: Citation): string | null {
+  if (citation.platform === 'ima') return '应用知识库'
+  return null
 }
 
 export function citationLabel(citation: Citation): string {

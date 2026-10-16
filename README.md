@@ -1,6 +1,6 @@
-# 知识引擎（M4 本地查证）
+# 知识引擎（M5 ima 连接器）
 
-Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode. M3 imports local files, indexes them, and answers from those chunks. M4 checks those files for freshness with a content hash and source mtime.
+Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode. M3 imports local files, indexes them, and answers from those chunks. M4 checks those files for freshness with a content hash and source mtime. M5 adds a Tencent ima connector (official OpenAPI only) that can list knowledge bases, search, and import selected notes or files into that same library.
 
 Import md, txt, pdf, or docx. Each file is chunked and written to SQLite FTS5 plus a vector index (sqlite-vec when the extension loads, otherwise a blob of the same vectors). `POST /chat` streams `citation`, `delta`, and `done` over SSE. Citations name the source file and chunk. If the library has documents but nothing matches, the answer is `当前知识库中没有找到相关内容。` and no citation is emitted. An empty library still returns the M0 stub, so older chat tests stay valid.
 
@@ -145,7 +145,7 @@ curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/verify/1
 
 `mode` `refetch` writes the file back into the library. Without `FEATURE_VERIFY`, both verify routes still return **501**.
 
-These routes still return **501**:
+With `FEATURE_IMA` unset, these routes still return **501**:
 
 | Method | Path |
 |---|---|
@@ -153,6 +153,11 @@ These routes still return **501**:
 | POST | `/connectors/{id}/sync` |
 | GET | `/connectors/{id}/status` |
 | DELETE | `/connectors/{id}` |
+| GET, POST, DELETE | `/settings/ima` |
+| GET | `/connectors/ima/bases`, `/connectors/ima/folders` |
+| POST | `/connectors/ima/search`, `/connectors/ima/import` |
+
+With `FEATURE_IMA=1` those routes are the ima connector. `POST /settings/key` is still the M0 stub and does not store provider keys.
 
 Apply migrations without starting the server. `DATA_DIR` is used when you leave the default URL in `alembic.ini` alone. `init_db(path)` always targets `<path>/data/app.db`.
 
@@ -188,7 +193,17 @@ The main process picks a free localhost port, starts `uvicorn app.main:app`, and
 3. `<repo>/services/sidecar/.venv/bin/python`
 4. `python3` on `PATH`
 
-The window is the library (import, list, delete, index status) and a chat pane. Citations are buttons; choosing one shows the chunk text and can open the stored file. Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier. Set `VITE_FEATURE_JEV=true` to mount the decision panel. Set `VITE_FEATURE_VERIFY=true` to show 查证 on library rows and citations, the stale update prompt, and automatic checks when a question contains a freshness cue. The shell copies that flag to the sidecar as `FEATURE_VERIFY`.
+The window is the library (import, list, delete, index status) and a chat pane. Citations are buttons; choosing one shows the chunk text and can open the stored file. Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier. Set `VITE_FEATURE_JEV=true` to mount the decision panel. Set `VITE_FEATURE_VERIFY=true` to show 查证 on library rows and citations, the stale update prompt, and automatic checks when a question contains a freshness cue. The shell copies that flag to the sidecar as `FEATURE_VERIFY`. `features.ima` also defaults to `false`. Set `VITE_FEATURE_IMA=true` to show the ima panel; the shell copies it as `FEATURE_IMA`. While that flag is off, `/connectors` and `/settings/ima` stay **501**.
+
+ima credentials are `IMA_CLIENT_ID` and `IMA_API_KEY` (the official client also accepts `IMA_OPENAPI_CLIENTID` and `IMA_OPENAPI_APIKEY`). If those are unset, the settings panel stores them in `$DATA_DIR/secrets/ima.json` (mode `0600`), not in SQLite. Requests go to `https://ima.qq.com` unless `IMA_BASE_URL` is set. Endpoint paths and the `ima-openapi-clientid` / `ima-openapi-apikey` headers live in `services/sidecar/app/connectors/ima_client.py`. A real-key check that does not print content:
+
+```bash
+cd services/sidecar
+export IMA_CLIENT_ID=... IMA_API_KEY=...
+python scripts/ima_smoke.py
+```
+
+Imported rows use `platform=ima`, `source_kind=connector`, and the ima id in `external_id`. With the ima account enabled they are retrieved in personal mode because they already sit in the local library; the citation badge says 应用知识库. Disconnecting the account leaves the rows on disk and drops them from new answers. With `FEATURE_VERIFY=1`, `POST /verify` re-fetches those rows through the API and compares `content_hash` (`fresh` / `stale`). If ima cannot be reached the state is `unknown`. List and search calls are cached (`IMA_CACHE_TTL_S`, default 60) and spaced (`IMA_MIN_INTERVAL_S`, default 0.2, `IMA_MAX_PER_MINUTE`, default 30). Those numbers are local guards — ima's quota is not published. LLM calls stay on the configured OpenAI-compatible endpoint (DeepSeek from mainland China). Embedding downloads still use `HF_ENDPOINT=https://hf-mirror.com` when `EMBED_PROVIDER=bge`.
 
 ```bash
 VITE_FEATURE_VERIFY=true VITE_FEATURE_JEV=true npm run dev
@@ -198,4 +213,4 @@ Import with “按路径导入” when you want 查证 to re-read that same file
 
 ## Not in this revision
 
-M5 and M6 are not implemented: no connector sync, and no live web search or web re-fetch. MediaCrawler is not downloaded. BGE-M3 and the reranker are not loaded unless `EMBED_PROVIDER=bge`. The Jev rule client is not a model endpoint. Google search and the fallback provider raise `SearchUnavailable` instead of calling out. `/connectors` still returns 501. `/verify` returns 501 until `FEATURE_VERIFY` is on.
+M6 is not implemented: no live web search or web re-fetch. MediaCrawler is not downloaded. BGE-M3 and the reranker are not loaded unless `EMBED_PROVIDER=bge`. The Jev rule client is not a model endpoint. Google search and the fallback provider raise `SearchUnavailable` instead of calling out. `/connectors` returns 501 until `FEATURE_IMA` is on. `/verify` returns 501 until `FEATURE_VERIFY` is on. Notion and local-folder connectors are still placeholders.

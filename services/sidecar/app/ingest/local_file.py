@@ -6,6 +6,7 @@ import base64
 import io
 import re
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -41,7 +42,13 @@ def import_payload(
     data: bytes,
     source_path: str | None = None,
     registry=None,
+    origin: dict | None = None,
 ) -> dict:
+    """Write one document through the local chunk/index path.
+
+    ``origin`` is set by the ima connector. It keeps platform ``ima``, the ima
+    source id, and ``source_kind=connector``. Local imports leave it empty.
+    """
     name = safe_filename(filename)
     suffix = Path(name).suffix.lower()
     if suffix not in _ALLOWED:
@@ -59,29 +66,40 @@ def import_payload(
     body = body.strip()
     if not body:
         raise ImportError(400, "没有从文件中抽出正文")
-    title = Path(name).stem or name
+    remote = origin or {}
+    platform = str(remote.get("platform") or "local_file")
+    source_id = str(remote.get("source_id") or name)
+    source_kind = str(remote.get("source_kind") or "local_file")
+    title = str(remote.get("title") or "").strip() or (Path(name).stem or name)
     digest = content_hash(title, body)
     existing = db.exec(
-        select(ContentItem).where(ContentItem.platform == "local_file", ContentItem.source_id == name)
+        select(ContentItem).where(ContentItem.platform == platform, ContentItem.source_id == source_id)
     ).first()
     if existing is not None and existing.content_hash == digest and existing.index_state == "indexed":
         return _public(existing, unchanged=True)
     now = utcnow()
+    metrics = {"filename": name, "bytes": len(data)}
+    extra_metrics = remote.get("metrics") if isinstance(remote.get("metrics"), dict) else {}
+    metrics.update(extra_metrics)
+    metrics["filename"] = name
+    metrics["bytes"] = len(data)
     if existing is None:
         item = ContentItem(
-            platform="local_file",
-            source_id=name,
+            platform=platform,
+            source_id=source_id,
             content_hash=digest,
             url="",
             title=title,
             body_text=body,
             index_state="pending",
-            source_kind="local_file",
+            source_kind=source_kind,
+            connector_id=str(remote.get("connector_id") or "") or None,
+            external_id=str(remote.get("external_id") or "") or None,
             fetched_at=now,
             freshness_state="fresh",
             freshness_reason="imported",
             media=[],
-            metrics={"filename": name, "bytes": len(data)},
+            metrics=metrics,
         )
         db.add(item)
         db.commit()
@@ -93,14 +111,19 @@ def import_payload(
         item.body_text = body
         item.index_state = "pending"
         item.last_error = None
-        item.source_kind = "local_file"
+        item.source_kind = source_kind
+        item.connector_id = str(remote.get("connector_id") or item.connector_id or "") or None
+        item.external_id = str(remote.get("external_id") or item.external_id or "") or None
         item.fetched_at = now
-        item.metrics = {"filename": name, "bytes": len(data)}
+        item.metrics = metrics
         db.add(item)
         db.commit()
         db.refresh(item)
     path = _store_bytes(int(item.id or 0), name, data)
-    _stamp_source(item, path, source_path)
+    if remote:
+        _stamp_remote(item, path, remote)
+    else:
+        _stamp_source(item, path, source_path)
     db.add(item)
     db.commit()
     indexed = index_item(int(item.id or 0), registry=registry)
@@ -211,6 +234,54 @@ def reingest_local(
         item.freshness_reason = "index_failed"
         db.add(item)
         db.commit()
+
+
+def reingest_text(db: Session, item: ContentItem, body: str, *, registry=None) -> None:
+    """Replace an imported body and index it again. Keeps platform and source id."""
+    text = (body or "").strip()
+    if not text:
+        raise OSError("没有从文件中抽出正文")
+    title = item.title or "未命名"
+    now = utcnow()
+    item.body_text = text
+    item.content_hash = content_hash(title, body=text)
+    item.index_state = "pending"
+    item.last_error = None
+    item.fetched_at = now
+    item.verified_at = now
+    item.freshness_state = "fresh"
+    item.freshness_reason = "updated"
+    metrics = dict(item.metrics or {})
+    metrics["bytes"] = len(text.encode("utf-8"))
+    item.metrics = metrics
+    db.add(item)
+    db.commit()
+    indexed = index_item(int(item.id or 0), registry=registry)
+    db.refresh(item)
+    if indexed.get("index_state") != "indexed":
+        item.freshness_state = "stale"
+        item.freshness_reason = "index_failed"
+        db.add(item)
+        db.commit()
+
+
+def _stamp_remote(item: ContentItem, stored: Path, origin: dict) -> None:
+    """Point the row at ima. The stored copy is only a local cache of the import."""
+    now = utcnow()
+    item.url = str(stored)
+    item.source_path = None
+    item.fetched_at = now
+    item.verified_at = now
+    item.freshness_state = "fresh"
+    item.freshness_reason = "imported"
+    item.source_kind = str(origin.get("source_kind") or item.source_kind or "connector")
+    item.platform = str(origin.get("platform") or item.platform or "ima")
+    mtime = origin.get("source_mtime")
+    if isinstance(mtime, datetime):
+        item.source_mtime = mtime
+    metrics = dict(item.metrics or {})
+    metrics["source"] = metrics.get("source") or "ima"
+    item.metrics = metrics
 
 
 def _stamp_source(item: ContentItem, stored: Path, source_path: str | None) -> None:

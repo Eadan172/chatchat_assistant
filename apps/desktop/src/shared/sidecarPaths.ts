@@ -2,7 +2,9 @@
 
 export function allowedSidecarPath(method: string, requestPath: string): boolean {
   const pathOnly = (requestPath.split('?')[0] || '/').trim()
-  if (method === 'DELETE') return /^\/library\/items\/\d+$/.test(pathOnly)
+  if (method === 'DELETE') {
+    return /^\/library\/items\/\d+$/.test(pathOnly) || /^\/connectors\/\d+$/.test(pathOnly) || pathOnly === '/settings/ima'
+  }
   if (method !== 'GET' && method !== 'POST') return false
   if (pathOnly === '/decision/logs') return method === 'GET'
   if (pathOnly === '/decision/shadow') return method === 'POST'
@@ -11,6 +13,13 @@ export function allowedSidecarPath(method: string, requestPath: string): boolean
     return method === 'POST'
   }
   if (/^\/verify\/\d+$/.test(pathOnly)) return method === 'GET'
+  if (pathOnly === '/connectors' || pathOnly === '/connectors/ima/bases' || pathOnly === '/connectors/ima/folders') {
+    return method === 'GET'
+  }
+  if (pathOnly === '/connectors/ima/search' || pathOnly === '/connectors/ima/import') return method === 'POST'
+  if (/^\/connectors\/\d+\/status$/.test(pathOnly)) return method === 'GET'
+  if (/^\/connectors\/\d+\/sync$/.test(pathOnly)) return method === 'POST'
+  if (pathOnly === '/settings/ima') return method === 'GET' || method === 'POST'
   if (
     pathOnly === '/chat' ||
     pathOnly === '/clarify/start' ||

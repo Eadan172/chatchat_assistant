@@ -1,10 +1,17 @@
-"""Settings and provider listing. API keys are still not written."""
+"""Settings and provider listing.
+
+LLM provider keys are still not written. ima credentials, when the feature
+flag is on, are stored in a local file outside SQLite.
+"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.api.connectors import ima_enabled
+from app.connectors.ima_client import BAD_KEY_MESSAGE, MISSING_KEY_MESSAGE, PATH_SEARCH_KNOWLEDGE_BASE, ImaClient, ImaError
+from app.connectors.ima_secrets import clear_saved_credentials, configured, credential_source, save_credentials
 from app.decision.shadow import load_settings, update_settings
 
 router = APIRouter()
@@ -20,6 +27,52 @@ class DecisionSettingsIn(BaseModel):
 @router.post("/settings/key")
 def set_key() -> dict:
     return {"ok": False, "stored": False, "stub": True}
+
+
+class ImaSettingsIn(BaseModel):
+    client_id: str = ""
+    api_key: str = ""
+
+
+def _ima_guard() -> None:
+    if not ima_enabled():
+        raise HTTPException(status_code=501, detail="not implemented")
+
+
+@router.get("/settings/ima")
+def get_ima_settings() -> dict:
+    _ima_guard()
+    return {"configured": configured(), "credential_source": credential_source()}
+
+
+@router.post("/settings/ima")
+def set_ima_settings(body: ImaSettingsIn) -> dict:
+    _ima_guard()
+    client_id = body.client_id.strip()
+    api_key = body.api_key.strip()
+    if not client_id or not api_key:
+        raise HTTPException(status_code=400, detail=MISSING_KEY_MESSAGE)
+    client = ImaClient(client_id, api_key)
+    try:
+        client.post(PATH_SEARCH_KNOWLEDGE_BASE, {"query": "", "cursor": "", "limit": 1})
+    except ImaError as exc:
+        status = {"missing_key": 400, "bad_key": 401, "rate_limit": 429, "unreachable": 502, "api": 502}.get(exc.kind, 502)
+        detail = BAD_KEY_MESSAGE if exc.kind == "bad_key" else exc.message
+        raise HTTPException(status_code=status, detail=detail) from exc
+    finally:
+        client.close()
+    try:
+        save_credentials(client_id, api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=MISSING_KEY_MESSAGE) from exc
+    return {"ok": True, "configured": True, "credential_source": credential_source()}
+
+
+@router.delete("/settings/ima")
+def delete_ima_settings() -> dict:
+    _ima_guard()
+    clear_saved_credentials()
+    return {"ok": True, "configured": configured(), "credential_source": credential_source()}
 
 
 @router.get("/settings/decision")

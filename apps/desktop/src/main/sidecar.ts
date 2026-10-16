@@ -42,8 +42,8 @@ function pythonBin(repoRoot: string): string {
   return process.platform === 'win32' ? 'python' : 'python3'
 }
 
-function verifyFlag(): string {
-  const raw = (process.env.FEATURE_VERIFY || process.env.VITE_FEATURE_VERIFY || '').trim().toLowerCase()
+function flagValue(name: string): string {
+  const raw = (process.env[name] || process.env[`VITE_${name}`] || '').trim().toLowerCase()
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on' ? '1' : ''
 }
 
@@ -82,8 +82,9 @@ export async function startSidecar(): Promise<string> {
       SIDECAR_TOKEN: sidecarToken,
       DATA_DIR: app.getPath('userData'),
       PYTHONUNBUFFERED: '1',
-      // The renderer reads VITE_FEATURE_VERIFY. Pass the same switch to Python.
-      FEATURE_VERIFY: verifyFlag(),
+      // The renderer reads VITE_FEATURE_*. Pass the same switches to Python.
+      FEATURE_VERIFY: flagValue('FEATURE_VERIFY'),
+      FEATURE_IMA: flagValue('FEATURE_IMA'),
     },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],

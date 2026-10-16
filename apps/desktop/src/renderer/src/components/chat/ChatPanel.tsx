@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { errorMessage, sidecarRequest, type SidecarEvent } from '../clarify/client'
 import { verifyItems } from '../verify/client'
 import { freshnessClass, freshnessLabel } from '../verify/view'
-import { citationLabel, isNotFound, type Citation } from './citations'
+import { citationLabel, isNotFound, sourceBadge, type Citation } from './citations'
 
 interface FreshnessNote {
   item_id?: number
@@ -26,7 +26,7 @@ function asCitation(data: unknown): Citation | null {
   return data as Citation
 }
 
-export function ChatPanel({ verifyOn = false }: { verifyOn?: boolean }) {
+export function ChatPanel({ verifyOn = false, imaOn = false }: { verifyOn?: boolean; imaOn?: boolean }) {
   const [turns, setTurns] = useState<Turn[]>([])
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -97,7 +97,11 @@ export function ChatPanel({ verifyOn = false }: { verifyOn?: boolean }) {
     }
 
     try {
-      const body = { message: question, mode: 'personal', sources: ['local'] }
+      const body = {
+        message: question,
+        mode: 'personal',
+        sources: imaOn ? ['local', 'connector'] : ['local'],
+      }
       if (window.desktop?.streamChat) {
         const result = await window.desktop.streamChat(body, apply)
         if (!result.ok) throw new Error(result.error || '问答失败')
@@ -187,6 +191,11 @@ export function ChatPanel({ verifyOn = false }: { verifyOn?: boolean }) {
                     className="rounded-full bg-pool px-3 py-1 text-xs text-ink"
                     onClick={() => setActive(citation)}
                   >
+                    {sourceBadge(citation) ? (
+                      <span data-testid="source-badge" data-source="ima" className="mr-1 rounded-full bg-white/80 px-1.5 py-0.5">
+                        {sourceBadge(citation)}
+                      </span>
+                    ) : null}
                     {citationLabel(citation)}
                     {verifyOn ? (
                       <span

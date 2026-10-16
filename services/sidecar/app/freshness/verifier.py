@@ -1,11 +1,13 @@
-"""fresh / stale / unknown / verifying for files that are already on disk.
+"""fresh / stale / unknown / verifying.
 
-Re-reads ``source_path`` (or the stored library copy). A changed hash or a
-newer mtime becomes ``stale`` and asks the user before re-ingest. A missing
-or unreadable path becomes ``unknown`` and is never reported as fresh.
+Local files re-read ``source_path``. A changed hash or a newer mtime becomes
+``stale`` and asks the user before re-ingest. A missing path becomes
+``unknown``.
 
-Web pages and connectors are not fetched. Those modes stay ``unknown`` with a
-deferred reason until a later milestone does the network check.
+Imported ima rows (platform ``ima``) are re-fetched through the official API
+and compared with ``content_hash``. A matching hash is ``fresh``, a different
+hash is ``stale``, and a failed re-fetch is ``unknown``. Other connectors and
+web pages stay ``unknown`` without a network call.
 """
 
 from __future__ import annotations
@@ -150,6 +152,13 @@ def _verify_one(item_id: int, *, mode: str, registry) -> dict[str, Any]:
         item = db.get(ContentItem, item_id)
         if item is None:
             return _row(item_id, "unknown", "missing_item", "none")
+        ima = _is_ima(item)
+    if ima:
+        return _verify_ima(item_id, mode=mode, registry=registry)
+    with open_session() as db:
+        item = db.get(ContentItem, item_id)
+        if item is None:
+            return _row(item_id, "unknown", "missing_item", "none")
         deferred = _deferred(item)
         if deferred:
             _save_state(item, "unknown", deferred, fetched=False)
@@ -287,6 +296,107 @@ def _mtime_newer(current: datetime | None, stored: datetime | None) -> bool:
     if left is None or right is None:
         return False
     return left - right > timedelta(seconds=1)
+
+
+def _is_ima(item: ContentItem) -> bool:
+    if (item.platform or "") == "ima":
+        return True
+    metrics = item.metrics or {}
+    return metrics.get("source") == "ima"
+
+
+def _verify_ima(item_id: int, *, mode: str, registry) -> dict[str, Any]:
+    with open_session() as db:
+        item = db.get(ContentItem, item_id)
+        if item is None:
+            return _row(item_id, "unknown", "missing_item", "none")
+        if mode == "hash_mtime" and _debounced_remote(item):
+            state = item.freshness_state if item.freshness_state in {"fresh", "stale", "unknown"} else "unknown"
+            return _row(item_id, state, item.freshness_reason or "debounced", "debounced", prompt_update=state == "stale")
+        item.freshness_state = "verifying"
+        item.freshness_reason = "verifying"
+        db.add(item)
+        db.commit()
+        metrics = dict(item.metrics or {})
+        title = item.title or ""
+    try:
+        from app.connectors.ima_service import fetch_imported_body, open_ima_client
+
+        with open_ima_client() as client:
+            body = fetch_imported_body(client, metrics, title=title)
+    except Exception as exc:
+        reason = _ima_unknown_reason(exc)
+        logger.info("ima verify item %s unavailable (%s)", item_id, reason)
+        _force_unknown(item_id, reason)
+        return _row(item_id, "unknown", reason, "none")
+    with open_session() as db:
+        item = db.get(ContentItem, item_id)
+        if item is None:
+            return _row(item_id, "unknown", "missing_item", "none")
+        if mode == "refetch":
+            return _refetch_ima(db, item, body, registry)
+        return _compare_ima(db, item, body)
+
+
+def _compare_ima(db: Session, item: ContentItem, body: str) -> dict[str, Any]:
+    item_id = int(item.id or 0)
+    text = (body or "").strip()
+    if not text:
+        _save_state(item, "unknown", "empty", fetched=False)
+        db.add(item)
+        db.commit()
+        return _row(item_id, "unknown", "empty", "none")
+    title = item.title or ""
+    digest = content_hash(title, text)
+    now = utcnow()
+    item.fetched_at = now
+    item.verified_at = now
+    if digest != (item.content_hash or ""):
+        item.freshness_state = "stale"
+        item.freshness_reason = "hash_changed"
+        action = "prompt_update"
+        prompt = True
+    else:
+        item.freshness_state = "fresh"
+        item.freshness_reason = "matched"
+        action = "none"
+        prompt = False
+    db.add(item)
+    db.commit()
+    return _row(item_id, item.freshness_state, item.freshness_reason or "", action, prompt_update=prompt, content_hash=item.content_hash)
+
+
+def _refetch_ima(db: Session, item: ContentItem, body: str, registry) -> dict[str, Any]:
+    from app.ingest.local_file import reingest_text
+
+    item_id = int(item.id or 0)
+    try:
+        reingest_text(db, item, body, registry=registry)
+    except Exception as exc:
+        logger.info("ima refetch failed for %s", item_id)
+        _save_state(item, "unknown", "unreadable", fetched=False)
+        db.add(item)
+        db.commit()
+        return _row(item_id, "unknown", "unreadable", "none", detail=str(exc)[:200])
+    db.refresh(item)
+    return _row(item_id, item.freshness_state or "fresh", item.freshness_reason or "updated", "updated")
+
+
+def _debounced_remote(item: ContentItem) -> bool:
+    verified = _as_dt(item.verified_at)
+    if verified is None or item.freshness_state not in {"fresh", "stale", "unknown"}:
+        return False
+    age = utcnow() - verified
+    if age < timedelta(0) or age.total_seconds() >= debounce_seconds():
+        return False
+    return True
+
+
+def _ima_unknown_reason(exc: Exception) -> str:
+    kind = getattr(exc, "kind", "") or ""
+    if kind in {"missing_key", "bad_key", "unreachable", "rate_limit"}:
+        return "unreachable"
+    return "unreachable"
 
 
 def _deferred(item: ContentItem) -> str | None:
