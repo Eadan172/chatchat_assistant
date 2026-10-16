@@ -13,6 +13,7 @@ constraints, and risks all hang off goal, so they can proceed independently.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +29,7 @@ NODE_FIELDS = {
     "tradeoffs": "tradeoffs",
     "risks": "risks",
     "next": "next_step",
+    "budget": "constraints",
 }
 
 _GOAL_RECOMMENDATIONS = {
@@ -324,7 +326,43 @@ def clamp_max_questions(value: int | None, fallback: int = DEFAULT_MAX_QUESTIONS
     return chosen
 
 
-def build_tree(keyword: str, domain_hint: str | None, max_questions: int) -> DesignTree:
+def clean_ambiguities(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Keep {term, options} rows that name at least two distinct candidates."""
+    found: list[dict[str, Any]] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        term = str(item.get("term") or "").strip()
+        options: list[str] = []
+        values = item.get("options") or []
+        if isinstance(values, str):
+            values = [part.strip() for part in re.split(r"[、,，]", values) if part.strip()]
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            text = str(value).strip()
+            if text and text != term and text not in options:
+                options.append(text)
+        if term and len(options) >= 2:
+            found.append({"term": term, "options": options[:6]})
+    return found
+
+
+def build_tree(
+    keyword: str,
+    domain_hint: str | None,
+    max_questions: int,
+    ambiguities: list[dict[str, Any]] | None = None,
+) -> DesignTree:
+    cleaned = clean_ambiguities(ambiguities)
+    hint = (domain_hint or "").strip().lower() or None
+    if cleaned:
+        return DesignTree(
+            keyword=keyword,
+            domain_hint=hint,
+            max_questions=max_questions,
+            nodes=_ambiguity_nodes(cleaned, max_questions),
+        )
     chosen: list[DesignNode] = []
     chosen_ids: set[str] = set()
     for row in _templates(keyword, domain_hint):
@@ -343,19 +381,59 @@ def build_tree(keyword: str, domain_hint: str | None, max_questions: int) -> Des
             )
         )
         chosen_ids.add(row["id"])
-    hint = (domain_hint or "").strip().lower() or None
     return DesignTree(keyword=keyword, domain_hint=hint, max_questions=max_questions, nodes=chosen)
+
+
+def _ambiguity_nodes(items: list[dict[str, Any]], max_questions: int) -> list[DesignNode]:
+    """One multiple-choice question per ambiguous term, then budget and taste."""
+    reserve_budget = max_questions >= 2
+    room = max_questions - (1 if reserve_budget else 0)
+    chosen = items[: max(room, 1)]
+    nodes: list[DesignNode] = []
+    ids: list[str] = []
+    for index, item in enumerate(chosen):
+        if len(nodes) >= max_questions:
+            break
+        node_id = f"ambiguity-{index}"
+        ids.append(node_id)
+        options = list(item["options"])
+        lines = [f"「{item['term']}」指的是哪一个？", *(f"{number}. {option}" for number, option in enumerate(options, start=1))]
+        nodes.append(
+            DesignNode(
+                id=node_id,
+                text="\n".join(lines),
+                recommendation=options[0],
+                reason="这个词有多个常见所指，先选定再检索。",
+                depends_on=[],
+            )
+        )
+    if reserve_budget and len(nodes) < max_questions:
+        nodes.append(
+            DesignNode(
+                id="budget",
+                text="预算和口味有什么要求？",
+                recommendation="预算不限，口味不限。",
+                reason="预算和口味会改变筛选范围。",
+                depends_on=ids,
+            )
+        )
+    return nodes
 
 
 def build_clarified_brief(tree: DesignTree) -> dict[str, Any]:
     values: dict[str, str | None] = {field: None for field in NODE_FIELDS.values()}
     parked: list[dict[str, str]] = []
+    scope_bits: list[str] = []
     for node in tree.nodes:
+        if node.id.startswith("ambiguity-") and node.status == "resolved" and node.decision:
+            scope_bits.append(str(node.decision))
         field_name = NODE_FIELDS.get(node.id)
         if node.status == "resolved" and field_name:
             values[field_name] = node.decision
         elif node.status == "parked":
             parked.append({"id": node.id, "reason": node.park_reason or "用户搁置"})
+    if scope_bits:
+        values["scope"] = "；".join(scope_bits)
     return {
         "brief": "clarified",
         "status": "clarified",

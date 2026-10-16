@@ -7,7 +7,7 @@ a failed model call falls back to the rule decider and a grouped list.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from app.ask.redact import install_redaction
@@ -41,6 +41,7 @@ class Plan:
     queries: list[str]
     backend: str
     fallback: str | None = None
+    ambiguities: list[dict[str, Any]] = field(default_factory=list)
 
 
 def iter_ask(
@@ -90,6 +91,7 @@ def iter_ask(
             domain_hint=None,
             skip=False,
             max_questions=ASK_CLARIFY_LIMIT,
+            ambiguities=plan.ambiguities,
         )
         yield from _clarify_events(view)
         return
@@ -133,6 +135,7 @@ def decide(message: str, *, brief: dict[str, Any] | None, kb_name: str, clarify:
                 sources=sources,
                 queries=list(raw["queries"]) or [message],
                 backend="deepseek",
+                ambiguities=list(raw.get("ambiguities") or []),
             )
         except DecisionUnavailable:
             logger.info("deepseek decision failed; using rule backend")

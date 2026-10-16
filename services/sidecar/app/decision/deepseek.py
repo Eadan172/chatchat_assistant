@@ -25,11 +25,15 @@ DEFAULT_MODEL = "deepseek-chat"
 
 _PLAN_SYSTEM = (
     "你是检索路由器。只输出一个 JSON 对象，不要解释。"
-    '格式：{"need_clarify":"yes或no","sources":["web","ima","local"],"queries":["检索词"],"confidence":0.8}。'
+    '格式：{"need_clarify":"yes或no","sources":["web","ima","local"],"queries":["检索词"],"confidence":0.8,'
+    '"ambiguities":[{"term":"原词","options":["候选一","候选二"]}]}。'
     "sources 只能从 web、ima、local 里选择。"
     "web 表示联网，ima 表示 ima 知识库，local 表示本地库。"
     "queries 是 1 到 3 条改写后的中文检索词。"
     "问题含糊、范围不清时 need_clarify 为 yes；问题已经明确时为 no。"
+    "如果地名、人名或其他实体有多个常见所指，need_clarify 必须为 yes，"
+    "ambiguities 列出每个原词和候选；没有歧义时 ambiguities 为 []。"
+    "不要编造候选，也不要把没有歧义的词写进去。"
 )
 
 _SOURCE_ALIASES = {
@@ -199,12 +203,24 @@ def _normalize_plan(data: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         number = 0.66
     number = min(1.0, max(0.0, number))
+    ambiguities = _normalize_ambiguities(data.get("ambiguities"))
+    if ambiguities:
+        clarify = "yes"
     return {
         "need_clarify": clarify,
         "sources": sources,
         "queries": queries[:3],
         "confidence": round(number, 4),
+        "ambiguities": ambiguities,
     }
+
+
+def _normalize_ambiguities(raw: Any) -> list[dict[str, Any]]:
+    from app.clarifier.design_tree import clean_ambiguities
+
+    if not isinstance(raw, list):
+        return []
+    return clean_ambiguities([item for item in raw if isinstance(item, dict)])
 
 
 def _channels(sources: Sequence[str]) -> list[str]:

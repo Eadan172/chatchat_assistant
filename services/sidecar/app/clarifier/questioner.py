@@ -25,6 +25,8 @@ def render_question(
     reason: str,
 ) -> tuple[str, str, str]:
     """Return text, recommendation, and reason. Recommendation is never empty."""
+    if node_id.startswith("ambiguity-") or node_id == "budget":
+        return text, recommendation, reason
     try:
         polished = polish_question(
             node_id=node_id,

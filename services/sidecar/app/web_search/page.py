@@ -110,7 +110,55 @@ def _to_text(raw: str, content_type: str) -> str:
     return compact[:_max_chars()]
 
 
+_MIN_ARTICLE = 200
+
+
 def _html_to_text(raw: str) -> str:
+    """Main article text: trafilatura first, readability-lxml second.
+
+    Page chrome (nav bars, footers) is dropped. When neither extractor finds
+    an article, return "" so the caller keeps the search snippet.
+    """
+    text = _trafilatura(raw)
+    if len(text) < _MIN_ARTICLE:
+        alt = _readability(raw)
+        if len(alt) > len(text):
+            text = alt
+    if len(text) < _MIN_ARTICLE:
+        return ""
+    return text[:_max_chars()]
+
+
+def _trafilatura(raw: str) -> str:
+    try:
+        import trafilatura
+    except ImportError:
+        return ""
+    try:
+        out = trafilatura.extract(raw, include_comments=False, include_tables=False, favor_precision=True)
+    except Exception:
+        return ""
+    return _tidy(out or "")
+
+
+def _readability(raw: str) -> str:
+    try:
+        from readability import Document
+    except ImportError:
+        return ""
+    try:
+        summary = Document(raw).summary(html_partial=True)
+    except Exception:
+        return ""
+    return _strip_tags(summary)
+
+
+def _tidy(text: str) -> str:
+    lines = [_SPACE.sub(" ", line).strip() for line in text.splitlines()]
+    return _BLANK.sub("\n\n", "\n".join(line for line in lines if line)).strip()
+
+
+def _strip_tags(raw: str) -> str:
     cleaned = _COMMENT.sub(" ", raw)
     cleaned = _BLOCK.sub(" ", cleaned)
     cleaned = _BREAK.sub("\n", cleaned)

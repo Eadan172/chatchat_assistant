@@ -803,7 +803,7 @@ def test_citations_keep_only_used_numbers_and_drop_unrelated_notes() -> None:
 
     def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
         captured["prompt"] = messages[-1]["content"]
-        return "先看丙。[3] 再看甲。[1] 编造。[99]", 2, 2
+        return "丙的正文足够用来区分第三条。[3]\n甲的正文足够用来区分第一条。[1]\n编造。[99]", 2, 2
 
     result = synthesize(
         "第一性原理",
@@ -894,7 +894,7 @@ def test_fetched_page_body_is_longer_than_snippet(mock_server: str) -> None:
     assert kept[0]["text"] == SNIPPET
 
     def complete_bad(messages: list[dict[str, str]]) -> tuple[str, int, int]:
-        return "页面说了这些。[1][8]", 1, 1
+        return "第一性原理的页面正文提到亚里士多德与基本事实。[1][8]", 1, 1
 
     guarded = synthesize(
         "第一性原理",
@@ -968,3 +968,155 @@ def test_vector_note_filter_drops_unrelated_guide(monkeypatch: pytest.MonkeyPatc
     monkeypatch.delenv("ASK_NOTE_RELEVANCE", raising=False)
     assert note_is_relevant("第一性原理", "原理笔记", NOTE_TEXT)
     assert not note_is_relevant("第一性原理", GUIDE_TITLE, GUIDE_TEXT)
+
+
+def test_ambiguous_entity_asks_named_candidates(
+    client: TestClient,
+    token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.ask.pipeline import decide
+    from app.clarifier.design_tree import build_tree
+    from app.decision.deepseek import _PLAN_SYSTEM, _normalize_plan
+
+    assert "ambiguities" in _PLAN_SYSTEM
+    person = _normalize_plan(
+        {
+            "need_clarify": "no",
+            "sources": ["web"],
+            "queries": ["李娜 近况"],
+            "confidence": 0.4,
+            "ambiguities": [{"term": "李娜", "options": ["网球运动员李娜", "歌手李娜"]}],
+        }
+    )
+    assert person["need_clarify"] == "yes"
+    person_tree = build_tree("李娜近况", None, 3, ambiguities=person["ambiguities"])
+    person_text = person_tree.current().text
+    assert "网球运动员李娜" in person_text
+    assert "歌手李娜" in person_text
+    assert "怎样才算成功" not in person_text
+
+    def fake_post(base, api_key, model, messages, *, temperature):
+        del base, model, temperature
+        assert api_key == DEEPSEEK_KEY
+        assert "ambiguities" in messages[0]["content"]
+        user = json.loads(messages[-1]["content"])
+        assert "古北" in user["text"]
+        content = json.dumps(
+            {
+                "need_clarify": "no",
+                "sources": ["web", "local"],
+                "queries": ["古北 附近 美食 排名"],
+                "confidence": 0.82,
+                "ambiguities": [{"term": "古北", "options": ["北京密云古北水镇", "上海长宁古北"]}],
+            },
+            ensure_ascii=False,
+        )
+        return {"choices": [{"message": {"content": content}}], "usage": {}, "_http_status": 200}
+
+    monkeypatch.setenv("FEATURE_ASK", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
+    monkeypatch.setattr("app.decision.deepseek._post_chat", fake_post)
+    plan = decide("去古北玩，附近美食排名", brief=None, kb_name="", clarify="auto")
+    assert plan.backend == "deepseek"
+    assert plan.need_clarify == "yes"
+    assert plan.ambiguities[0]["term"] == "古北"
+
+    opened = client.post(
+        "/ask",
+        headers=headers(token),
+        json={"message": "去古北玩，附近美食排名", "clarify": "auto"},
+    )
+    assert opened.status_code == 200, opened.text
+    events = parse_sse(opened.text)
+    question = next(payload for name, payload in events if name == "clarify_question")
+    text = question["question"]["text"]
+    assert "北京密云古北水镇" in text
+    assert "上海长宁古北" in text
+    assert "怎样才算成功" not in text
+    assert str(question["question"]["id"]).startswith("ambiguity-")
+
+    step = client.post(
+        "/ask",
+        headers=headers(token),
+        json={
+            "message": "去古北玩，附近美食排名",
+            "session_id": question["session_id"],
+            "answers": [{"question_id": question["question"]["id"], "action": "edit", "value": "北京密云古北水镇"}],
+        },
+    )
+    assert step.status_code == 200, step.text
+    follow = parse_sse(step.text)
+    nxt = next(payload for name, payload in follow if name == "clarify_question")
+    assert "预算" in nxt["question"]["text"]
+    assert "口味" in nxt["question"]["text"]
+    assert "怎样才算成功" not in nxt["question"]["text"]
+
+
+def test_ranking_copies_source_order_and_cites_only_supporting_lines() -> None:
+    from app.ask.synthesize import NO_LIVE_SCORE
+
+    listing = "大众点评美食榜：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅"
+    related = "古北附近有很多美食，适合周末去玩。"
+    scored = "大众点评美食榜：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅。评分 4.8、4.6、4.5。"
+    captured: dict[str, str] = {}
+
+    def complete(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        captured["system"] = messages[0]["content"]
+        return "附近美食排名：1. 甲餐厅 2. 乙餐厅 3. 丙餐厅。[1][2]", 1, 1
+
+    result = synthesize(
+        "去古北玩，附近美食排名",
+        {
+            "web": [
+                {"title": "点评榜", "url": "https://example.com/list", "text": listing, "position": 1, "source": "web"},
+                {"title": "游记", "url": "https://example.com/note", "text": related, "position": 2, "source": "web"},
+            ]
+        },
+        complete=complete,
+    )
+    assert "按原顺序原样写出" in captured["system"]
+    assert "不要自己重排" in captured["system"]
+    assert "不要编造" in captured["system"]
+    assert "仅仅话题相关" in captured["system"]
+    assert NO_LIVE_SCORE in result.text
+    assert "[2]" not in result.text
+    assert result.text.index("甲餐厅") < result.text.index("乙餐厅") < result.text.index("丙餐厅")
+    assert [item["title"] for item in result.citations] == ["点评榜"]
+    assert "https://" not in captured["system"]
+
+    def reversed_list(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        return "1. 丙餐厅 2. 乙餐厅 3. 甲餐厅。[1]", 1, 1
+
+    reversed_result = synthesize(
+        "附近美食排名",
+        {"web": [{"title": "点评榜", "url": "https://example.com/list", "text": listing, "source": "web"}]},
+        complete=reversed_list,
+    )
+    assert "[1]" not in reversed_result.text
+    assert reversed_result.citations == []
+
+    def with_scores(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        captured["scored"] = messages[0]["content"]
+        return "1. 甲餐厅 2. 乙餐厅 3. 丙餐厅。[1]", 1, 1
+
+    scored_result = synthesize(
+        "美食 top",
+        {"web": [{"title": "点评榜", "url": "https://example.com/list", "text": scored, "source": "web"}]},
+        complete=with_scores,
+    )
+    assert "按原顺序" in captured["scored"]
+    assert NO_LIVE_SCORE not in scored_result.text
+    assert [item["title"] for item in scored_result.citations] == ["点评榜"]
+
+    def plain(messages: list[dict[str, str]]) -> tuple[str, int, int]:
+        captured["plain"] = messages[0]["content"]
+        return "第一性原理是一种思考方式。[1]", 1, 1
+
+    synthesize(
+        "第一性原理",
+        {"ima": [{"title": "原理笔记", "text": NOTE_TEXT, "ima_kind": "note", "source": "ima"}]},
+        complete=plain,
+    )
+    assert "按原顺序" not in captured["plain"]
+    assert "仅仅话题相关" in captured["plain"]

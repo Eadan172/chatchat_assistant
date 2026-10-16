@@ -37,6 +37,7 @@ def start_session(
     domain_hint: str | None,
     skip: bool,
     max_questions: int | None,
+    ambiguities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     text = keyword.strip()
     if not text:
@@ -46,7 +47,7 @@ def start_session(
     hint = (domain_hint or "").strip().lower() or None
     limit = clamp_max_questions(max_questions, fallback=_default_max_questions())
     try:
-        tree = build_tree(text, hint, limit)
+        tree = build_tree(text, hint, limit, ambiguities=ambiguities)
     except DesignTreeError as exc:
         raise ClarifyError(exc.status_code, exc.detail) from exc
     row = ClarifySession(

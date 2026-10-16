@@ -292,6 +292,8 @@ def synthesize(
     except Exception:
         return finish(grouped_text(query, evidences, conflicts, reason=GROUPED_FAILED), "offline", "grouped", 0, 0)
     text = _finalize(raw, evidences, conflicts)
+    text = drop_unsupported_citations(text, citations)
+    text = ensure_score_notice(query, text, evidences)
     return finish(text, "deepseek", "deepseek-chat", prompt_tokens, completion_tokens)
 
 
@@ -370,11 +372,101 @@ def public_citation(item: Evidence) -> dict[str, Any]:
     }
 
 
+_RANK_QUERY = re.compile(r"排名|榜单|排行|(?<![A-Za-z])top(?![A-Za-z])", re.IGNORECASE)
+_RANK_ITEM = re.compile(
+    r"(?:(?<!\d)\d{1,2}\s*[.、．]|第[一二三四五六七八九十]+[名位]?)\s*([^\d。\n;；.]{2,40})"
+)
+_SCORE = re.compile(r"评分|口碑|星级|\d+(?:\.\d+)?\s*分")
+NO_LIVE_SCORE = "摘录里没有实时评分或口碑分数。"
+
+
+def ranking_requested(query: str) -> bool:
+    return bool(_RANK_QUERY.search(query or ""))
+
+
+def citation_supports(claim: str, source: str) -> bool:
+    """True when this sentence's facts, not just its topic, are in the excerpt."""
+    body = _CITE.sub(" ", claim or "")
+    ranked = _ranked_items(body)
+    if len(ranked) >= 2:
+        return _order_preserved(ranked, source)
+    claim_tokens = {token for token in tokens(body) if len(token) >= 2}
+    if not claim_tokens:
+        return False
+    source_tokens = {token for token in tokens(source or "") if len(token) >= 2}
+    numbers = set(_NUMBER.findall(body))
+    if numbers and not numbers <= set(_NUMBER.findall(source or "")):
+        return False
+    return len(claim_tokens & source_tokens) / float(len(claim_tokens)) >= 0.5
+
+
+def drop_unsupported_citations(text: str, citations: list[dict[str, Any]]) -> str:
+    """Remove [n] from a line when that source does not state the line."""
+    by_n = {int(item["n"]): item for item in citations if isinstance(item.get("n"), int)}
+    cleaned_lines: list[str] = []
+    for line in (text or "").split("\n"):
+        def replace(match: re.Match[str], claim: str = line) -> str:
+            number = int(match.group(1))
+            item = by_n.get(number)
+            if item is None:
+                return match.group(0)
+            if citation_supports(claim, str(item.get("text") or "")):
+                return match.group(0)
+            return ""
+
+        cleaned_lines.append(_CITE.sub(replace, line))
+    cleaned = "\n".join(cleaned_lines)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def ensure_score_notice(query: str, text: str, items: list[Evidence]) -> str:
+    if not ranking_requested(query):
+        return text
+    if any(_SCORE.search(item.text or "") for item in items):
+        return text
+    if any(phrase in (text or "") for phrase in ("没有实时评分", "没有评分", "没有口碑")):
+        return text
+    base = (text or "").strip()
+    if not base:
+        return NO_LIVE_SCORE
+    return f"{base}\n{NO_LIVE_SCORE}"
+
+
+def _ranked_items(text: str) -> list[str]:
+    found: list[str] = []
+    for match in _RANK_ITEM.finditer(text or ""):
+        name = re.sub(r"\s+", "", match.group(1)).strip("，,、 ")
+        if len(name) >= 2 and name not in found:
+            found.append(name)
+    return found
+
+
+def _order_preserved(items: list[str], source: str) -> bool:
+    compact = re.sub(r"\s+", "", source or "")
+    cursor = 0
+    for item in items:
+        pos = compact.find(item, cursor)
+        if pos < 0:
+            return False
+        cursor = pos + len(item)
+    return True
+
+
 def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[str, str]]:
     system = (
         "你是问答助手。只根据给出的编号和摘录用中文回答。"
         "每条要点用 [n] 引用，只能使用下面出现过的编号，不要编造编号或摘录之外的事实。"
+        "每一条要点的 [n] 只能标在直接写出该句事实的摘录上，不能标在仅仅话题相关的来源上。"
     )
+    if ranking_requested(query):
+        system += (
+            "用户要的是排名、榜单或 top。"
+            "摘录里如果已经有榜单，按原顺序原样写出，不要自己重排，也不要编造名次或名称。"
+            "每一份榜单只引用它出自的那篇文章的编号。"
+            "如果摘录里没有实时评分或口碑分数，要明确写出没有。"
+        )
     if conflict:
         system += (
             "知识库和网页的说法不一致。回答必须写明「两处来源说法不同」，"
