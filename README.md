@@ -10,7 +10,7 @@
 - Python 3.11 或 3.12
 - 可选的密钥：DeepSeek（用来组织和写回答）、Serper（用来上网搜索）。没有搜索密钥时，仍可以导入本地文件并离线回答。要用 ima 知识库，还需要 ima 的 Client ID 和 API Key。
 
-密钥只放在你自己的电脑上。下面的示例都是占位文字，请换成你自己的，不要把真密钥写进仓库或发给别人。
+密钥只放在你自己的电脑上。仓库里只跟踪 `.env.example`。把它复制成 `.env` 后再填写；`.env`、`.env.local` 和 `secrets/*.json` 不会被提交。下面的示例账号是虚构的 `you@example.com`，问题用「某地附近的餐厅推荐」和「示例概念是什么」。请换成你自己的密钥，不要把真密钥写进仓库。
 
 ## 安装
 
@@ -85,15 +85,38 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 
 ## 填写密钥
 
-真密钥不要出现在命令历史以外的文件里，也不要提交到 git。
+真密钥只留在本机的 `.env` 或数据目录里的密钥文件中，不要提交到 git。
 
-**方式一：启动前写在环境变量里**（桌面程序和单独启动的后台都会读到）
+**方式一：复制示例文件，再在当前终端里加载**
+
+程序不会自动读取仓库根目录的 `.env`。复制并改好之后，在启动前于同一个终端里加载：
 
 ```bash
-export DEEPSEEK_API_KEY=在这里粘贴你的密钥
-export SERPER_API_KEY=在这里粘贴你的密钥
-export IMA_CLIENT_ID=在这里粘贴你的ClientID
-export IMA_API_KEY=在这里粘贴你的密钥
+cp .env.example .env
+set -a
+source .env
+set +a
+```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item .env.example .env
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+  $name, $value = $_.Split('=', 2)
+  Set-Item -Path "Env:$($name.Trim())" -Value $value.Trim()
+}
+```
+
+`.env.example` 里的账号是 `you@example.com`，密钥都写成 `replace-me`。打开 `.env`，把 `replace-me` 换成你自己的，然后再执行上面的加载命令。也可以不写文件，在启动前临时设置：
+
+```bash
+# 虚构账号 you@example.com
+export DEEPSEEK_API_KEY=replace-me
+export SERPER_API_KEY=replace-me
+export IMA_CLIENT_ID=replace-me
+export IMA_API_KEY=replace-me
 ```
 
 上网搜索也可以改用 `SERPAPI_API_KEY` 或 `TAVILY_API_KEY`。三个搜索密钥里有一个即可。
@@ -106,8 +129,8 @@ export IMA_API_KEY=在这里粘贴你的密钥
 
 ```json
 {
-  "deepseek_api_key": "在这里粘贴你的密钥",
-  "serper_api_key": "在这里粘贴你的密钥"
+  "deepseek_api_key": "replace-me",
+  "serper_api_key": "replace-me"
 }
 ```
 
@@ -115,10 +138,12 @@ export IMA_API_KEY=在这里粘贴你的密钥
 
 ```json
 {
-  "client_id": "在这里粘贴你的ClientID",
-  "api_key": "在这里粘贴你的密钥"
+  "client_id": "replace-me",
+  "api_key": "replace-me"
 }
 ```
+
+这两个文件在本机数据目录里，不要提交。示例账号仍是 `you@example.com`。
 
 **方式三：写在窗口里**
 
@@ -130,7 +155,7 @@ ima 的 Client ID 和 API Key 从 [https://ima.qq.com/agent-interface](https://i
 
 ## 怎么用
 
-1. 在输入框写下问题，例如「某地附近的餐厅推荐」，然后发送。
+1. 在输入框写下问题。示例账号 `you@example.com` 可以问「某地附近的餐厅推荐」，或问「示例概念是什么」，然后发送。
 2. 如果范围还没说清，程序会一次问一件事。有选项时点其中一个；要改说法就在框里输入。地点题没有预设答案，需要你写清楚或从列出的候选里选。
 3. 回答里的 `[1]`、`[2]` 是引用。点引用可以看摘录，并知道它来自本地文件、ima 知识库还是网页。
 4. 只想查已经导入的文档时，可以不打开提问。先在左侧导入 md、txt、pdf 或 docx，再在输入框提问。库里没有相关内容时，会直接说明没有找到。
