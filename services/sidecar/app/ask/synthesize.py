@@ -273,7 +273,7 @@ def synthesize(
     tail = [*related, *extra]
 
     def finish(text: str, provider: str, model: str, prompt_tokens: int, completion_tokens: int) -> Synthesis:
-        limited = ensure_external_limits(query, text, evidences)
+        limited = apply_fixed_notes(query, ensure_external_limits(query, text, evidences))
         cleaned, used = align_citations(strip_empty_points(limited), citations)
         if provider == "deepseek" and evidences and not used:
             notices = [
@@ -302,6 +302,7 @@ def synthesize(
         return finish(grouped_text(query, evidences, conflicts, reason=GROUPED_FAILED), "offline", "grouped", 0, 0)
     text = _finalize(raw, evidences, conflicts)
     text = drop_unsupported_citations(text, citations)
+    text = _post_clean(query, text, evidences)
     extra_prompt, extra_completion = 0, 0
     if not conflicts:
         text, extra_prompt, extra_completion = _regenerate_thin(
@@ -311,9 +312,8 @@ def synthesize(
             citations,
             complete,
         )
+        text = _post_clean(query, text, evidences)
     text = ensure_score_notice(query, text, evidences)
-    text = apply_price_constraint(query, text, evidences)
-    text = flag_stale_sources(text, evidences)
     return finish(
         text,
         "deepseek",
@@ -408,14 +408,23 @@ _RANK_MARK = re.compile(
 )
 _HAS_SCORE = re.compile(r"评分|口碑|星级|\d+(?:\.\d+)?\s*分|(?<!\d)\d\.\d(?!\d)")
 _BUDGET = re.compile(r"(?:人均|预算)\s*(\d+)\s*(?:元)?\s*(?:以?内|以下)")
-_MONEY = re.compile(r"(?:¥|￥)\s*(\d{2,6})|人均\s*(\d{2,5})|(?<![0-9])(\d{2,5})\s*元")
 _YEAR = re.compile(r"((?:19|20)\d{2})\s*年")
+_SCORE_TOKEN = re.compile(r"(?<!\d)\d\.\d(?!\d)|\d+(?:\.\d+)?\s*分")
+_STALE_MARK = re.compile(r"可能已过时|年资料")
+_CUISINE_FAMILIES = (
+    ("日料", ("日料", "日本料理", "寿司", "刺身", "日式", "居酒屋", "日本菜")),
+    ("火锅", ("火锅",)),
+    ("中餐", ("中餐", "川菜", "本帮")),
+    ("西餐", ("西餐",)),
+    ("烤肉", ("烤肉", "烧烤")),
+)
+_OTHER_CUISINES = ("咖喱", "印度", "火锅", "川菜", "本帮", "西餐", "烤肉", "中餐", "烧烤", "泰国", "韩料", "韩式")
 _KEEP_LINE = (
     "两处来源说法不同",
     "时效：",
     "超出预算",
-    "已排除高于",
     "按人均",
+    "价格亲民",
     "可能已过时",
     "没有实时评分",
     "没有评分",
@@ -441,7 +450,7 @@ _NOTICE_MARKS = (
     DISTANCE_GAP,
     NO_LIVE_SCORE,
     "按人均",
-    "已排除高于",
+    "价格亲民",
     "可能已过时",
     "超出预算",
 )
@@ -544,26 +553,19 @@ def _has_score(text: str) -> bool:
 
 
 def ensure_external_limits(query: str, text: str, items: list[Evidence]) -> str:
-    """Dianping scores and metro distances come only from excerpts. No map API."""
+    """Drop invented scores. Fixed notes are appended separately, once each."""
     cleaned = _drop_invented_scores(text, items) if wants_dianping(query) else text
-    if wants_dianping(query) and DIANPING_NOTICE not in cleaned:
-        cleaned = f"{cleaned}\n{DIANPING_NOTICE}".strip() if cleaned.strip() else DIANPING_NOTICE
-    if wants_distance(query):
-        sourced = False
-        additions: list[str] = []
-        for item in items:
-            match = _DISTANCE.search(item.text or "")
-            if match is None:
-                continue
-            sourced = True
-            snippet = match.group(0).strip()
-            if snippet and snippet not in cleaned:
-                additions.append(f"{snippet}。[{item.n}]")
-        if additions:
-            cleaned = _join(cleaned, "\n".join(additions))
-        if not sourced and "精确距离" not in cleaned:
-            cleaned = f"{cleaned}\n{DISTANCE_GAP}".strip() if cleaned.strip() else DISTANCE_GAP
+    if wants_distance(query) and not _answer_has_sourced_distance(cleaned, items) and "精确距离" not in cleaned:
+        cleaned = _join(cleaned, DISTANCE_GAP)
     return cleaned
+
+
+def _answer_has_sourced_distance(text: str, items: list[Evidence]) -> bool:
+    for match in _DISTANCE.finditer(text or ""):
+        snippet = match.group(0)
+        if any(snippet in (item.text or "") for item in items):
+            return True
+    return False
 
 
 def wants_dianping(query: str) -> bool:
@@ -646,43 +648,67 @@ def price_cap(text: str) -> int | None:
     return None
 
 
-def apply_price_constraint(query: str, text: str, items: list[Evidence]) -> str:
-    cap = price_cap(query)
-    if cap is None:
-        return text
-    labels: list[str] = []
-    for item in items:
-        for label in _over_cap_labels(item.text or "", cap):
-            if label not in labels:
-                labels.append(label)
-    kept = [line for line in (text or "").splitlines() if not _line_over_cap(line, cap)]
-    body = "\n".join(kept).strip()
-    assumption = f"按人均{cap}元以内筛选。"
-    if assumption not in body:
-        body = _join(assumption, body)
-    if labels:
-        note = f"已排除高于人均{cap}元的：{'、'.join(labels)}。"
-        if note not in body:
-            body = _join(body, note)
-    return body
+AFFORDABLE_ASSUMPTION = "把“价格亲民”按人均150元以内理解"
 
 
-def flag_stale_sources(text: str, items: list[Evidence]) -> str:
+def required_notes(query: str) -> list[str]:
+    """Fixed wording only. Fact sentences stay in the model answer."""
     notes: list[str] = []
-    for item in items:
-        years = [year for year in listed_years(f"{item.title}\n{item.text}") if year <= STALE_YEAR]
-        if not years:
-            continue
-        note = f"《{item.title}》为{min(years)}年资料，可能已过时。"
-        if note not in (text or "") and note not in notes:
-            notes.append(note)
-    if not notes:
-        return text
-    return _join(text, "\n".join(notes))
+    if "价格亲民" in (query or ""):
+        notes.append(AFFORDABLE_ASSUMPTION)
+    cap = price_cap(query)
+    if cap is not None:
+        notes.append(f"按人均{cap}元以内筛选")
+    if wants_dianping(query):
+        notes.append(DIANPING_NOTICE.rstrip("。"))
+    return notes
+
+
+def apply_fixed_notes(query: str, text: str) -> str:
+    """Keep each fixed note once, and append a missing required note."""
+    watched = required_notes(query) + [
+        NO_LIVE_SCORE.rstrip("。"),
+        DISTANCE_GAP.rstrip("。"),
+        NO_CITATIONS,
+    ]
+    seen: set[str] = set()
+    lines_out: list[str] = []
+    for line in (text or "").split("\n"):
+        pieces: list[str] = []
+        for sentence in _sentence_pieces(line):
+            contained = [note for note in watched if _note_key(note) and _note_key(note) in _note_key(sentence)]
+            pure = [note for note in contained if _is_pure_note(sentence, note)]
+            if pure and any(_note_key(note) in seen for note in pure):
+                continue
+            for note in contained:
+                seen.add(_note_key(note))
+            pieces.append(sentence)
+        if pieces:
+            lines_out.append("".join(pieces))
+    body = "\n".join(lines_out).strip()
+    for note in required_notes(query):
+        if _note_key(note) not in seen and not _note_present(body, note):
+            body = _join(body, f"{note}。")
+            seen.add(_note_key(note))
+    return body
 
 
 def listed_years(text: str) -> list[int]:
     return [int(match.group(1)) for match in _YEAR.finditer(text or "")]
+
+
+def source_year(title: str, text: str) -> int | None:
+    """One date per source: the title year, otherwise the latest year in the text."""
+    from datetime import date
+
+    limit = date.today().year
+    titled = [year for year in listed_years(title) if 1900 <= year <= limit]
+    if titled:
+        return max(titled)
+    years = [year for year in listed_years(text) if 1900 <= year <= limit]
+    if not years:
+        return None
+    return max(years)
 
 
 def prefer_recent(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -690,14 +716,12 @@ def prefer_recent(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     def sort_key(pair: tuple[int, dict[str, Any]]) -> tuple[int, int, int]:
         index, hit = pair
-        years = listed_years(f"{hit.get('title') or ''} {hit.get('text') or ''}")
-        recent = [year for year in years if year > STALE_YEAR]
-        old = [year for year in years if year <= STALE_YEAR]
-        if recent:
-            return (0, -max(recent), index)
-        if old:
-            return (2, min(old), index)
-        return (1, 0, index)
+        year = source_year(str(hit.get("title") or ""), str(hit.get("text") or ""))
+        if year is None:
+            return (1, 0, index)
+        if year > STALE_YEAR:
+            return (0, -year, index)
+        return (2, -year, index)
 
     ordered = sorted(enumerate(hits), key=sort_key)
     result: list[dict[str, Any]] = []
@@ -706,6 +730,40 @@ def prefer_recent(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         copied["position"] = position
         result.append(copied)
     return result
+
+
+def requested_cuisine_terms(text: str) -> tuple[str, ...]:
+    blob = text or ""
+    for label, terms in _CUISINE_FAMILIES:
+        if label in blob or any(term in blob for term in terms):
+            return terms
+    return ()
+
+
+def filter_cuisine_hits(hits: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    """Keep hits that mention the requested cuisine. Other requests are unchanged."""
+    terms = requested_cuisine_terms(text)
+    if not terms:
+        return list(hits)
+    return [hit for hit in hits if _blob_has_term(hit, terms)]
+
+
+def polish_staleness(text: str, items: list[Evidence]) -> str:
+    """Drop a staleness sentence that is the only use of a source, or names another year."""
+    rows = _sentence_rows(text)
+    real: set[int] = set()
+    for parts in rows:
+        for sentence in parts:
+            if _STALE_MARK.search(sentence):
+                continue
+            real.update(int(number) for number in _CITE.findall(sentence))
+    by_n = {item.n: item for item in items}
+    kept_rows: list[str] = []
+    for parts in rows:
+        kept = [sentence for sentence in parts if _keep_stale_sentence(sentence, real, by_n)]
+        if kept:
+            kept_rows.append("".join(kept))
+    return "\n".join(kept_rows).strip()
 
 
 def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[str, str]]:
@@ -722,10 +780,18 @@ def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[st
             "「1.」这种序号不是名次。摘录没有这些标记时不要写第几名，也不要把原文顺序当成名次。"
             "如果摘录和回答里都没有实时评分或口碑分数，要明确写出没有。"
         )
+    if "价格亲民" in (query or ""):
+        system += "把“价格亲民”按人均150元以内理解。回答里用这一句原话说明这是假设，只写一次。"
     cap = price_cap(query)
     if cap is not None:
-        system += f"价格按人均{cap}元以内筛选。回答里要写明「按人均{cap}元以内筛选」。超过这个上限的不要列入。"
-    system += "摘录里写了2019年或更早的年份时，要标明资料可能已过时。"
+        system += (
+            f"筛选口径是人均{cap}元以内。回答里写一次「按人均{cap}元以内筛选」。"
+            "超过上限的店不要写进推荐。不要粘贴网页导航、按钮或摘录里的无关分数。"
+        )
+    cuisine = requested_cuisine_terms(query)
+    if cuisine:
+        system += f"只推荐{cuisine[0]}。摘录对不上这个菜系的店不要写。"
+    system += "不要单独引用一条来源来说明它过时。若提到年份，同一来源只写一个年份，并与正文使用同一条引用。"
     if wants_dianping(query):
         system += (
             "用户要大众点评分数。不能抓取大众点评，也不要编造分数。"
@@ -953,44 +1019,100 @@ def _is_list_article(item: Evidence, query: str) -> bool:
     return False
 
 
-def _over_cap_labels(text: str, cap: int) -> list[str]:
-    labels: list[str] = []
-    for part in re.split(r"[·•|\n。；;]", text or ""):
-        if "按人均" in part or "已排除" in part or "年" in part and not _MONEY.search(part):
+def _post_clean(query: str, text: str, items: list[Evidence]) -> str:
+    text = drop_uncited_scores(text)
+    text = drop_cuisine_mismatches(query, text)
+    return polish_staleness(text, items)
+
+
+def drop_uncited_scores(text: str) -> str:
+    """A score with no [n] is not a citation."""
+    kept_lines: list[str] = []
+    for line in (text or "").split("\n"):
+        if any(mark in line for mark in _KEEP_LINE):
+            kept_lines.append(line)
             continue
-        overs = [(raw, value) for raw, value in _money_values(part) if value > cap]
-        if not overs:
-            continue
-        name = part
-        for raw, _value in _money_values(part):
-            name = name.replace(raw, "", 1)
-        name = re.sub(r"\s+", "", name)
-        name = re.sub(r"[0-9]{4}\s*年", "", name)
-        name = name.strip(" ，,、:：[]（）()·•-—")
-        for raw, _value in overs:
-            label = f"{name}{raw}" if name else raw
-            if label not in labels:
-                labels.append(label)
-    return labels
+        pieces = [
+            sentence
+            for sentence in _sentence_pieces(line)
+            if not (_SCORE_TOKEN.search(sentence) and not _CITE.search(sentence))
+        ]
+        if pieces:
+            kept_lines.append("".join(pieces))
+    return "\n".join(kept_lines).strip()
 
 
-def _money_values(text: str) -> list[tuple[str, int]]:
-    found: list[tuple[str, int]] = []
-    for match in _MONEY.finditer(text or ""):
-        raw_value = next(group for group in match.groups() if group)
-        found.append((match.group(0).strip(), int(raw_value)))
-    return found
-
-
-def _line_over_cap(line: str, cap: int) -> bool:
-    if any(mark in line for mark in ("按人均", "已排除", "可能已过时", NO_CITATIONS)):
-        return False
-    return any(value > cap for _raw, value in _money_values(line))
+def drop_cuisine_mismatches(query: str, text: str) -> str:
+    terms = requested_cuisine_terms(query)
+    if not terms:
+        return text
+    kept_lines: list[str] = []
+    for line in (text or "").split("\n"):
+        pieces = [sentence for sentence in _sentence_pieces(line) if not _cuisine_conflict(sentence, terms)]
+        if pieces:
+            kept_lines.append("".join(pieces))
+    return "\n".join(kept_lines).strip()
 
 
 def _join(left: str, right: str) -> str:
     parts = [part.strip() for part in (left, right) if part and part.strip()]
     return "\n".join(parts)
+
+
+def _sentence_rows(text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in (text or "").split("\n"):
+        parts = [part for part in _sentence_pieces(line) if part.strip()]
+        if parts:
+            rows.append(parts)
+    return rows
+
+
+def _keep_stale_sentence(sentence: str, real: set[int], by_n: dict[int, Evidence]) -> bool:
+    if not _STALE_MARK.search(sentence):
+        return True
+    cites = {int(number) for number in _CITE.findall(sentence)}
+    if not cites or cites.isdisjoint(real):
+        return False
+    years = {int(year) for year in _YEAR.findall(sentence)}
+    if not years:
+        return True
+    for number in cites:
+        item = by_n.get(number)
+        if item is None:
+            continue
+        year = source_year(item.title, item.text)
+        if year is None or years != {year}:
+            return False
+    return True
+
+
+def _blob_has_term(hit: dict[str, Any], terms: tuple[str, ...]) -> bool:
+    blob = f"{hit.get('title') or ''} {hit.get('text') or ''}"
+    return any(term in blob for term in terms)
+
+
+def _cuisine_conflict(sentence: str, terms: tuple[str, ...]) -> bool:
+    if any(mark in sentence for mark in _KEEP_LINE):
+        return False
+    if any(term in sentence for term in terms):
+        return False
+    return any(mark in sentence for mark in _OTHER_CUISINES if mark not in terms)
+
+
+def _note_key(text: str) -> str:
+    normalized = text.replace("“", '"').replace("”", '"').replace("「", "").replace("」", "")
+    return re.sub(r"[\s。！？.]+", "", normalized)
+
+
+def _is_pure_note(sentence: str, note: str) -> bool:
+    body = _CITE.sub("", sentence)
+    return _note_key(body) == _note_key(note)
+
+
+def _note_present(text: str, note: str) -> bool:
+    key = _note_key(note)
+    return bool(key) and key in _note_key(text)
 
 
 def _excerpt(text: str, limit: int) -> str:

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 NO_WEB_KEY = "未配置联网搜索密钥。请填写 SERPER_API_KEY、SERPAPI_API_KEY 或 TAVILY_API_KEY 中的至少一个。"
 NO_WEB_RESULT = "未检索到网络结果。"
+MAX_WEB_RESULTS = 20
 
 _OK_STATUS = {"success", "ok", "succeeded"}
 
@@ -53,7 +54,7 @@ def search_web(query: str, *, limit: int = 5) -> WebSearchResult:
     text = (query or "").strip()
     if not text:
         return WebSearchResult(notice=NO_WEB_RESULT)
-    bounded = max(1, min(int(limit or 5), 10))
+    bounded = max(1, min(int(limit or 5), MAX_WEB_RESULTS))
     providers = [item for item in _providers() if secret_value(item.key_name)]
     if not providers:
         return WebSearchResult(notice=NO_WEB_KEY)

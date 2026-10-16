@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from app.ask.redact import install_redaction
-from app.ask.synthesize import normalize_url, prefer_recent, synthesize
+from app.ask.synthesize import filter_cuisine_hits, normalize_url, prefer_recent, synthesize
 from app.clarifier.design_tree import specified_food_query, vague_food_query
 from app.clarifier.session import (
     ClarifyError,
@@ -188,6 +188,7 @@ def _search_and_answer(
         mode=mode,
         verify=verify,
         registry=registry,
+        context=question or message,
     )
     for notice in notices:
         yield "notice", {"text": notice}
@@ -265,6 +266,7 @@ def _retrieve(
     mode: str,
     verify: str,
     registry,
+    context: str = "",
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     del verify
     groups: dict[str, list[dict[str, Any]]] = {"local": [], "ima": [], "web": []}
@@ -277,21 +279,25 @@ def _retrieve(
         if notice:
             notices.append(notice)
     if "web" in sources:
-        hits, web_notices = _search_web(queries)
+        hits, web_notices = _search_web(queries, context=context)
         groups["web"] = hits
         notices.extend(web_notices)
     return groups, notices
 
 
-def _search_web(queries: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
-    """Search each short query and merge hits, dropping duplicate URLs."""
+WEB_SEARCH_LIMIT = 20
+_SITE_FILTERS = ("site:dianping.com", "site:xiaohongshu.com")
+
+
+def _search_web(queries: list[str], *, context: str = "") -> tuple[list[dict[str, Any]], list[str]]:
+    """Search each short query, plus site variants, and merge hits by URL."""
     from app.web_search.live import NO_WEB_RESULT
 
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     notices: list[str] = []
-    for query in queries:
-        found = search_web(query)
+    for query in _expanded_web_queries(queries):
+        found = search_web(query, limit=WEB_SEARCH_LIMIT)
         if found.notice and found.notice not in notices:
             notices.append(found.notice)
         batch: list[str] = []
@@ -303,9 +309,27 @@ def _search_web(queries: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
                 batch.append(url)
             merged.append(hit)
         seen.update(batch)
-    if merged:
+    matched = filter_cuisine_hits(merged, context or " ".join(queries))
+    if matched:
         notices = [note for note in notices if note != NO_WEB_RESULT]
-    return enrich_web_hits(prefer_recent(merged)), notices
+    elif merged and NO_WEB_RESULT not in notices:
+        notices.append(NO_WEB_RESULT)
+    return enrich_web_hits(prefer_recent(matched)), notices
+
+
+def _expanded_web_queries(queries: list[str]) -> list[str]:
+    """2–3 rewritten queries also search Dianping and Xiaohongshu."""
+    base = [query.strip() for query in queries if query and query.strip()]
+    if not (2 <= len(base) <= 3):
+        return base
+    expanded: list[str] = []
+    for query in base:
+        expanded.append(query)
+        if "site:" in query.lower():
+            continue
+        for site in _SITE_FILTERS:
+            expanded.append(f"{query} {site}")
+    return expanded
 
 
 def _search_local(queries: list[str], *, brief: dict[str, Any] | None, mode: str, registry) -> list[dict[str, Any]]:

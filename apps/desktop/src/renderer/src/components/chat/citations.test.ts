@@ -10,7 +10,7 @@ describe('citation labels', () => {
   })
 
   it('badges ima citations as the app knowledge base', () => {
-    const citation: Citation = { platform: 'ima', filename: '腾飞供应商纪要.txt', n: 1 }
+    const citation: Citation = { platform: 'ima', filename: '示例纪要.txt', n: 1 }
     expect(sourceBadge(citation)).toBe('应用知识库')
     expect(sourceBadge({ filename: 'qingjiao-notes.md', source_kind: 'local_file' })).toBeNull()
   })

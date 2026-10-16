@@ -21,7 +21,7 @@ from app.main import app
 
 GOOD_KEY = "test-ima-key-not-a-secret-value"
 CLIENT_ID = "test-ima-client"
-NOTE_BODY = "腾飞供应商去年的拿铁合同写明露台座位优先。"
+NOTE_BODY = "示例笔记里写了一条座位约定。"
 SECRET_MARK = "super-secret-ima-key"
 
 
@@ -64,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         STATE.calls.append({"path": self.path, "method": "GET", "cookie": self.headers.get("cookie")})
-        payload = "ima file body: 露台座位优先。".encode("utf-8")
+        payload = "ima file body: 座位约定。".encode("utf-8")
         self.send_response(200)
         self.send_header("content-type", "text/plain; charset=utf-8")
         self.send_header("content-length", str(len(payload)))
@@ -87,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
                             "cover_url": "",
                             "member_count": 1,
                             "content_count": 2,
-                            "description": "供应商纪要",
+                            "description": "示例说明",
                             "creator": {},
                             "role_type": 0,
                             "base_type": 0,
@@ -115,7 +115,7 @@ class Handler(BaseHTTPRequestHandler):
                         "folder_number": 0,
                         "parent_folder_id": "",
                     },
-                    {"media_id": "media_note", "title": "腾飞供应商纪要", "parent_folder_id": ""},
+                    {"media_id": "media_note", "title": "示例纪要", "parent_folder_id": ""},
                 ]
             return {"code": 0, "msg": "成功", "data": {"knowledge_list": entries, "is_end": True, "next_cursor": "", "current_path": []}}
         if path.endswith("/search_knowledge"):
@@ -126,9 +126,9 @@ class Handler(BaseHTTPRequestHandler):
                     "info_list": [
                         {
                             "media_id": "media_note",
-                            "title": "腾飞供应商纪要",
+                            "title": "示例纪要",
                             "parent_folder_id": "",
-                            "highlight_content": "拿铁合同",
+                            "highlight_content": "示例约定",
                         }
                     ],
                     "is_end": True,
@@ -143,7 +143,7 @@ class Handler(BaseHTTPRequestHandler):
                     "msg": "成功",
                     "data": {
                         "media_type": 13,
-                        "url_info": {"url": f"http://{host}/files/zhouhui.txt", "headers": {}},
+                        "url_info": {"url": f"http://{host}/files/sample.txt", "headers": {}},
                     },
                 }
             return {"code": 0, "msg": "成功", "data": {"media_type": 11, "notebook_ext_info": {"notebook_id": "note123"}}}
@@ -162,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
                 "code": 0,
                 "msg": "成功",
                 "data": {
-                    "note_book_list": [{"note_id": "note123", "title": "腾飞供应商纪要", "summary": "合同摘要"}],
+                    "note_book_list": [{"note_id": "note123", "title": "示例纪要", "summary": "合同摘要"}],
                     "is_end": True,
                 },
             }
@@ -173,8 +173,8 @@ class Handler(BaseHTTPRequestHandler):
                 "data": {
                     "search_note_infos": [
                         {
-                            "note_book_info": {"note_id": "note123", "title": "腾飞供应商纪要", "summary": "合同摘要"},
-                            "highlightInfo": {"doc_title": "<em>拿铁</em>合同"},
+                            "note_book_info": {"note_id": "note123", "title": "示例纪要", "summary": "合同摘要"},
+                            "highlightInfo": {"doc_title": "<em>示例词</em>约定"},
                         }
                     ],
                     "is_end": True,
@@ -292,7 +292,7 @@ def test_list_bases_folders_and_search(client: TestClient, token: str) -> None:
     body = bases.json()
     assert body["knowledge_bases"][0]["id"] == "kb1"
     assert body["knowledge_bases"][0]["name"] == "行业研究"
-    assert body["knowledge_bases"][0]["description"] == "供应商纪要"
+    assert body["knowledge_bases"][0]["description"] == "示例说明"
     assert body["notebooks"][0]["name"] == "工作"
     folders = client.get("/connectors/ima/folders", headers=headers(token), params={"knowledge_base_id": "kb1"})
     assert folders.status_code == 200
@@ -310,7 +310,7 @@ def test_list_bases_folders_and_search(client: TestClient, token: str) -> None:
     found = client.post(
         "/connectors/ima/search",
         headers=headers(token),
-        json={"query": "拿铁", "knowledge_base_id": "kb1"},
+        json={"query": "示例词", "knowledge_base_id": "kb1"},
     )
     assert found.status_code == 200
     hits = found.json()["hits"]
@@ -332,7 +332,7 @@ def test_import_note_is_cited_as_ima(client: TestClient, token: str) -> None:
     imported = client.post(
         "/connectors/ima/import",
         headers=headers(token),
-        json={"items": [{"kind": "note", "id": "note123", "title": "腾飞供应商纪要"}]},
+        json={"items": [{"kind": "note", "id": "note123", "title": "示例纪要"}]},
     )
     assert imported.status_code == 200
     assert imported.json()["count"] == 1
@@ -356,7 +356,7 @@ def test_import_note_is_cited_as_ima(client: TestClient, token: str) -> None:
     search = client.post(
         "/search",
         headers=headers(token),
-        json={"query": "露台座位优先", "mode": "personal", "sources": ["local"]},
+        json={"query": "座位约定", "mode": "personal", "sources": ["local"]},
     )
     hits = search.json()["hits"]
     assert hits
@@ -365,14 +365,14 @@ def test_import_note_is_cited_as_ima(client: TestClient, token: str) -> None:
     chat = client.post(
         "/chat",
         headers=headers(token),
-        json={"message": "露台座位怎么安排", "mode": "personal", "sources": ["local"]},
+        json={"message": "座位约定怎么安排", "mode": "personal", "sources": ["local"]},
     )
     events = parse_sse(chat.text)
     citations = [payload for name, payload in events if name == "citation"]
     assert citations
     assert citations[0]["platform"] == "ima"
     assert citations[0]["source_kind"] == "connector"
-    assert "露台" in citations[0]["text"] or "拿铁" in "".join(
+    assert "座位约定" in citations[0]["text"] or "示例词" in "".join(
         payload.get("text", "") for name, payload in events if name == "delta"
     )
 
@@ -391,7 +391,7 @@ def test_import_text_file_uses_media_url_without_cookies(client: TestClient, tok
         ).fetchone()
     assert platform == "ima"
     assert external_id == "filetxt"
-    assert "露台座位优先" in body
+    assert "座位约定" in body
     downloads = [call for call in STATE.calls if call.get("method") == "GET"]
     assert downloads
     assert all(call.get("cookie") is None for call in downloads)
@@ -402,7 +402,7 @@ def test_disable_drops_ima_from_new_answers(client: TestClient, token: str) -> N
     client.post(
         "/connectors/ima/import",
         headers=headers(token),
-        json={"items": [{"kind": "note", "id": "note123", "title": "腾飞供应商纪要"}]},
+        json={"items": [{"kind": "note", "id": "note123", "title": "示例纪要"}]},
     )
     accounts = client.get("/connectors", headers=headers(token)).json()["accounts"]
     removed = client.delete(f"/connectors/{accounts[0]['id']}", headers=headers(token))
@@ -410,7 +410,7 @@ def test_disable_drops_ima_from_new_answers(client: TestClient, token: str) -> N
     search = client.post(
         "/search",
         headers=headers(token),
-        json={"query": "露台座位优先", "mode": "personal", "sources": ["local", "connector"]},
+        json={"query": "座位约定", "mode": "personal", "sources": ["local", "connector"]},
     )
     assert search.json()["hits"] == []
     library = client.get("/library/items", headers=headers(token)).json()
@@ -424,13 +424,13 @@ def test_verify_refetches_ima(client: TestClient, token: str, monkeypatch: pytes
     imported = client.post(
         "/connectors/ima/import",
         headers=headers(token),
-        json={"items": [{"kind": "note", "id": "note123", "title": "腾飞供应商纪要"}]},
+        json={"items": [{"kind": "note", "id": "note123", "title": "示例纪要"}]},
     )
     item_id = imported.json()["imported"][0]["id"]
     fresh = client.post("/verify", headers=headers(token), json={"item_ids": [item_id], "mode": "hash_mtime"})
     assert fresh.status_code == 200
     assert fresh.json()["stats"]["items"][0]["state"] == "fresh"
-    STATE.note = "合同已经改成室内座位，不再保留露台。"
+    STATE.note = "约定已经改成室内座位，不再保留旧说法。"
     stale = client.post("/verify", headers=headers(token), json={"item_ids": [item_id], "mode": "hash_mtime"})
     assert stale.json()["stats"]["items"][0]["state"] == "stale"
     assert stale.json()["stats"]["items"][0]["prompt_update"] is True
@@ -439,7 +439,7 @@ def test_verify_refetches_ima(client: TestClient, token: str, monkeypatch: pytes
     assert unknown.json()["stats"]["items"][0]["state"] == "unknown"
     with sqlite3.connect(get_engine().url.database or "") as conn:
         body = conn.execute("SELECT body_text FROM content_item WHERE id = ?", (item_id,)).fetchone()[0]
-    assert "露台座位优先" in body
+    assert "座位约定" in body
 
 
 def test_secrets_stay_out_of_sqlite_and_logs(client: TestClient, token: str, caplog: pytest.LogCaptureFixture) -> None:
@@ -487,9 +487,9 @@ def test_cache_and_rate_limit(client: TestClient, token: str, monkeypatch: pytes
     assert client.post(
         "/connectors/ima/search",
         headers=headers(token),
-        json={"query": "拿铁"},
+        json={"query": "示例词"},
     ).status_code == 200
-    limited = client.post("/connectors/ima/search", headers=headers(token), json={"query": "拿铁"})
+    limited = client.post("/connectors/ima/search", headers=headers(token), json={"query": "示例词"})
     assert limited.status_code == 429
     assert "频繁" in limited.json()["detail"]
 
@@ -504,7 +504,7 @@ def test_smoke_script_prints_counts_only(ima_server: str, tmp_path: Path) -> Non
             "IMA_MIN_INTERVAL_S": "0",
             "IMA_CACHE_TTL_S": "0",
             "IMA_MAX_PER_MINUTE": "1000",
-            "IMA_SMOKE_QUERY": "拿铁",
+            "IMA_SMOKE_QUERY": "示例词",
             "DATA_DIR": str(tmp_path),
         }
     )
@@ -516,8 +516,8 @@ def test_smoke_script_prints_counts_only(ima_server: str, tmp_path: Path) -> Non
     kb_calls = [call for call in STATE.calls if str(call.get("path", "")).endswith("/search_knowledge")]
     assert kb_calls
     assert kb_calls[0]["body"]["knowledge_base_id"] == "kb1"
-    assert "腾飞" not in result.stdout
-    assert "拿铁" not in result.stdout
+    assert "示例纪要" not in result.stdout
+    assert "示例词" not in result.stdout
     assert GOOD_KEY not in result.stdout
     assert CLIENT_ID not in result.stdout
     missing = os.environ.copy()
@@ -537,7 +537,7 @@ def test_refetch_updates_imported_note(client: TestClient, token: str, monkeypat
     imported = client.post(
         "/connectors/ima/import",
         headers=headers(token),
-        json={"items": [{"kind": "note", "id": "note123", "title": "腾飞供应商纪要"}]},
+        json={"items": [{"kind": "note", "id": "note123", "title": "示例纪要"}]},
     )
     item_id = imported.json()["imported"][0]["id"]
     STATE.note = "新的合同改到室内。"
