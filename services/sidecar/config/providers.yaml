@@ -1,4 +1,6 @@
 # Provider registry. api_key_ref names a keyring entry; never put a secret here.
+# Mainland China: DeepSeek (OpenAI-compatible) stays the default chat route.
+# Do not switch the default to Gemini or https://api.openai.com — those time out.
 # protocol: openai | litellm | local
 # enabled: false entries stay hidden from the default provider list.
 

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { errorMessage, sidecarRequest } from '../clarify/client'
+import { verifyItems } from '../verify/client'
+import { freshnessClass, freshnessLabel } from '../verify/view'
 
 interface LibraryItem {
   id: number
@@ -8,6 +10,10 @@ interface LibraryItem {
   index_state?: string
   chunk_count?: number
   last_error?: string | null
+  freshness_state?: string
+  freshness_reason?: string | null
+  source_path?: string | null
+  prompt_update?: boolean
 }
 
 function asItems(data: unknown): LibraryItem[] {
@@ -35,10 +41,12 @@ async function fileToBase64(file: File): Promise<string> {
   return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
 }
 
-export function LibraryPanel() {
+export function LibraryPanel({ verifyOn = false }: { verifyOn?: boolean }) {
   const [items, setItems] = useState<LibraryItem[]>([])
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [pathDraft, setPathDraft] = useState('')
+  const [checkingId, setCheckingId] = useState<number | null>(null)
 
   async function reload() {
     const result = await sidecarRequest('GET', '/library/items')
@@ -84,6 +92,55 @@ export function LibraryPanel() {
     }
   }
 
+  async function importPath(path: string) {
+    const trimmed = path.trim()
+    if (!trimmed) return
+    setPending(true)
+    setError(null)
+    try {
+      const filename = trimmed.split(/[/\\]/).pop() || 'document.md'
+      const result = await sidecarRequest('POST', '/library/import', { path: trimmed, filename })
+      if (!result.ok) throw new Error(result.error || errorMessage(result.data, '导入失败'))
+      setPathDraft('')
+      await reload()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '导入失败')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  async function check(id: number, mode: 'hash_mtime' | 'refetch') {
+    setCheckingId(id)
+    setError(null)
+    setItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, freshness_state: 'verifying' } : item)),
+    )
+    try {
+      const job = await verifyItems([id], mode)
+      const row = job.items.find((item) => item.item_id === id)
+      if (job.state === 'failed') throw new Error('查证失败')
+      setItems((current) =>
+        current.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                freshness_state: row?.state || item.freshness_state,
+                prompt_update: row?.state === 'stale',
+                freshness_reason: row?.reason,
+              }
+            : item,
+        ),
+      )
+      if (mode === 'refetch') await reload()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '查证失败')
+      await reload()
+    } finally {
+      setCheckingId(null)
+    }
+  }
+
   async function remove(id: number) {
     setPending(true)
     setError(null)
@@ -126,6 +183,31 @@ export function LibraryPanel() {
           }}
         />
       </label>
+      {verifyOn ? (
+        <form
+          className="mt-3 flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void importPath(pathDraft)
+          }}
+        >
+          <input
+            data-testid="library-path"
+            className="min-w-0 flex-1 rounded-full bg-mist px-3 py-1 text-xs outline-none ring-1 ring-pool"
+            placeholder="本地文件路径，便于之后对账"
+            value={pathDraft}
+            onChange={(event) => setPathDraft(event.target.value)}
+          />
+          <button
+            type="submit"
+            data-testid="library-path-import"
+            className="rounded-full px-3 py-1 text-xs text-sage ring-1 ring-pool disabled:opacity-50"
+            disabled={pending || !pathDraft.trim()}
+          >
+            按路径导入
+          </button>
+        </form>
+      ) : null}
       {error ? <p className="mt-3 text-sm text-ink">{error}</p> : null}
       <ul className="mt-4 space-y-2">
         {items.length === 0 ? <li className="text-sm text-slate-500">还没有文档。</li> : null}
@@ -133,19 +215,56 @@ export function LibraryPanel() {
           <li
             key={item.id}
             data-testid="library-item"
-            className="flex items-start justify-between gap-3 rounded-xl bg-mist/70 px-3 py-2"
+            data-source-path={item.source_path || ''}
+            data-freshness={item.freshness_state || 'unknown'}
+            className="rounded-xl bg-mist/70 px-3 py-2"
           >
-            <div>
-              <p className="text-sm">{item.filename || item.title || '未命名'}</p>
-              <p className="text-xs text-slate-500" data-testid="library-status">
-                {statusLabel(item.index_state)}
-                {typeof item.chunk_count === 'number' ? ` · ${item.chunk_count} 块` : ''}
-                {item.last_error ? ` · ${item.last_error}` : ''}
-              </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm">{item.filename || item.title || '未命名'}</p>
+                <p className="text-xs text-slate-500" data-testid="library-status">
+                  {statusLabel(item.index_state)}
+                  {typeof item.chunk_count === 'number' ? ` · ${item.chunk_count} 块` : ''}
+                  {item.last_error ? ` · ${item.last_error}` : ''}
+                </p>
+              </div>
+              <button type="button" className="text-xs text-sage" onClick={() => void remove(item.id)} disabled={pending}>
+                删除
+              </button>
             </div>
-            <button type="button" className="text-xs text-sage" onClick={() => void remove(item.id)} disabled={pending}>
-              删除
-            </button>
+            {verifyOn ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span
+                  data-testid="freshness-badge"
+                  data-state={checkingId === item.id ? 'verifying' : item.freshness_state || 'unknown'}
+                  className={`rounded-full px-2 py-0.5 text-xs ${freshnessClass(checkingId === item.id ? 'verifying' : item.freshness_state)}`}
+                >
+                  {freshnessLabel(checkingId === item.id ? 'verifying' : item.freshness_state)}
+                </span>
+                <button
+                  type="button"
+                  data-testid="verify-button"
+                  className="rounded-full px-2 py-0.5 text-xs text-sage ring-1 ring-pool disabled:opacity-50"
+                  disabled={pending || checkingId === item.id}
+                  onClick={() => void check(item.id, 'hash_mtime')}
+                >
+                  {checkingId === item.id ? '查证中…' : '查证'}
+                </button>
+              </div>
+            ) : null}
+            {verifyOn && item.freshness_state === 'stale' && checkingId !== item.id ? (
+              <div data-testid="update-prompt" className="mt-2 rounded-xl bg-amber-100 px-3 py-2 text-xs text-amber-950">
+                文件内容和知识库不一致，可能已过期。要重新导入并更新知识库吗？
+                <button
+                  type="button"
+                  data-testid="update-library"
+                  className="ml-2 rounded-full bg-sage px-2 py-0.5 text-white"
+                  onClick={() => void check(item.id, 'refetch')}
+                >
+                  更新
+                </button>
+              </div>
+            ) : null}
           </li>
         ))}
       </ul>

@@ -5,6 +5,8 @@ probes in shadow mode and does not switch channels, clarification, or
 generation. M3 runs local retrieval when the library already has chunks.
 Shadow decisions stay advisory: ``sources`` on the retrieval record is the
 caller whitelist, not the decider's channel list.
+M4 local freshness checks run in the chat route when FEATURE_VERIFY is on.
+This module still does not switch channels. Web re-fetch waits for M6.
 """
 
 from __future__ import annotations

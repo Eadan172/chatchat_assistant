@@ -39,7 +39,9 @@ def chat_endpoint(
     env_key = _env("LLM_API_KEY", "OPENAI_API_KEY")
     env_model = _env("LLM_MODEL", "OPENAI_MODEL")
     if env_url and env_key:
-        chosen = model or env_model or _routed_model(registry, "chat") or "gpt-4o-mini"
+        # Last resort when a base URL is set without a model id. Prefer DeepSeek;
+        # do not fall back to a Gemini or OpenAI model name.
+        chosen = model or env_model or _routed_model(registry, "chat") or "deepseek-v4-flash"
         return Endpoint(
             base_url=env_url,
             api_key=env_key,

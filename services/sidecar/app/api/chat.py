@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.clarifier.session import ClarifyError, attach_chat_turn, record_plain_turn, resolve_chat_brief
 from app.db.session import open_session
+from app.freshness.policies import apply_chat_freshness
 from app.orchestrator.chat_pipeline import prepare_chat_context, probe_decisions
 from app.retrieval.answer import compose_answer
 
@@ -98,7 +99,7 @@ def _public_hit(hit: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _prepare(body: ChatBody, registry) -> dict | None:
+def _prepare(body: ChatBody, registry, client=None) -> dict | None:
     text = _user_text(body)
     with open_session() as db:
         try:
@@ -153,6 +154,13 @@ def _prepare(body: ChatBody, registry) -> dict | None:
                     gap=None,
                 )
             hits = [_public_hit(hit) for hit in retrieval.get("hits") or []]
+            freshness = apply_chat_freshness(
+                message=text,
+                verify=body.verify,
+                hits=hits,
+                client=client,
+                registry=registry,
+            )
             answer = compose_answer(
                 text,
                 hits,
@@ -161,6 +169,8 @@ def _prepare(body: ChatBody, registry) -> dict | None:
                 provider_id=body.provider,
                 model=body.model,
             )
+            if freshness.get("note") and freshness["note"] not in answer.text:
+                answer.text = f"{answer.text}\n{freshness['note']}"
             latency_ms = int((time.perf_counter() - started) * 1000)
             public = _public_retrieval(retrieval, accepted=row is not None, hits=hits)
             if row is not None:
@@ -213,6 +223,8 @@ def _prepare(body: ChatBody, registry) -> dict | None:
                 brief=brief,
                 retrieval=public,
                 gap=answer.gap,
+                freshness=freshness.get("events") or [],
+                verify_ms=freshness["ms"] if freshness.get("ran") else None,
             )
         except ClarifyError as exc:
             db.rollback()
@@ -284,7 +296,7 @@ async def chat(request: Request) -> StreamingResponse:
     registry = getattr(request.app.state, "registry", None)
     failed: HTTPException | None = None
     try:
-        outcome = _prepare(body, registry)
+        outcome = _prepare(body, registry, getattr(request.app.state, "decision_client", None))
     except HTTPException as exc:
         outcome = None
         failed = exc
@@ -295,6 +307,9 @@ async def chat(request: Request) -> StreamingResponse:
     def events():
         for item in decisions:
             yield _sse("decision", item)
+        if outcome is not None:
+            for item in outcome.get("freshness") or []:
+                yield _sse("freshness", item)
         if outcome is None:
             yield _sse("delta", {"text": STUB_TEXT})
             yield _sse(
@@ -331,6 +346,8 @@ async def chat(request: Request) -> StreamingResponse:
             done["brief"] = outcome["brief"]
         if outcome["gap"]:
             done["gap"] = outcome["gap"]
+        if outcome.get("verify_ms") is not None:
+            done["verify_ms"] = outcome["verify_ms"]
         yield _sse("done", done)
 
     return StreamingResponse(

@@ -23,7 +23,12 @@ EMBED_DIM = 1024
 
 
 def _load_model():
-    """Lazy BGE loader. Not called during process startup or the default path."""
+    """Lazy BGE loader. Not called during process startup or the default path.
+
+    huggingface.co often times out from mainland China, so the mirror is the
+    default unless the process already chose an endpoint.
+    """
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     from FlagEmbedding import BGEM3FlagModel
 
     return BGEM3FlagModel("BAAI/bge-m3", use_fp16=True, device=None)

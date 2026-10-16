@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
-import { features, flagEnabled } from '../../shared/features'
+import { flagEnabled } from '../../shared/features'
 import { ChatPanel } from './components/chat/ChatPanel'
 import { ClarifyPanel } from './components/clarify/ClarifyPanel'
 import { DecisionSettings } from './components/decision/DecisionSettings'
 import { LibraryPanel } from './components/library/LibraryPanel'
-import { VerifyPlaceholder } from './components/verify/VerifyPlaceholder'
 
 interface HealthState {
   ok?: boolean
@@ -14,6 +13,7 @@ interface HealthState {
 
 const clarifyOn = flagEnabled('clarify', import.meta.env.VITE_FEATURE_CLARIFY)
 const jevOn = flagEnabled('jev', import.meta.env.VITE_FEATURE_JEV)
+const verifyOn = flagEnabled('verify', import.meta.env.VITE_FEATURE_VERIFY)
 
 export function App() {
   const [health, setHealth] = useState<HealthState | null>(null)
@@ -28,7 +28,7 @@ export function App() {
       className="min-h-screen bg-mist text-ink"
       data-clarify={String(clarifyOn)}
       data-jev={String(jevOn)}
-      data-verify={String(features.verify)}
+      data-verify={String(verifyOn)}
     >
       <div className="mx-auto max-w-6xl px-6 py-8">
         <header className="flex flex-wrap items-end justify-between gap-4">
@@ -43,12 +43,11 @@ export function App() {
           </p>
         </header>
         <div className="mt-6 grid items-start gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <LibraryPanel />
-          <ChatPanel />
+          <LibraryPanel verifyOn={verifyOn} />
+          <ChatPanel verifyOn={verifyOn} />
         </div>
         {clarifyOn ? <ClarifyPanel /> : null}
         {jevOn ? <DecisionSettings /> : null}
-        {features.verify ? <VerifyPlaceholder /> : null}
       </div>
     </main>
   )

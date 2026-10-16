@@ -1,6 +1,6 @@
-# 知识引擎（M3 本地库问答）
+# 知识引擎（M4 本地查证）
 
-Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode. M3 imports local files, indexes them, and answers from those chunks.
+Local desktop Q&A agent. M0 is the Electron + React shell, the FastAPI sidecar, and the Alembic migration. M1 adds grill-me clarification. M2 records Jev-style decisions in shadow mode. M3 imports local files, indexes them, and answers from those chunks. M4 checks those files for freshness with a content hash and source mtime.
 
 Import md, txt, pdf, or docx. Each file is chunked and written to SQLite FTS5 plus a vector index (sqlite-vec when the extension loads, otherwise a blob of the same vectors). `POST /chat` streams `citation`, `delta`, and `done` over SSE. Citations name the source file and chunk. If the library has documents but nothing matches, the answer is `当前知识库中没有找到相关内容。` and no citation is emitted. An empty library still returns the M0 stub, so older chat tests stay valid.
 
@@ -8,7 +8,9 @@ Shadow decisions are unchanged: every `/chat` still logs intent and channel prob
 
 Chat and embeddings are OpenAI-compatible. Set `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` (or `EMBED_BASE_URL`, `EMBED_API_KEY`, `EMBED_MODEL`). With no key, indexing uses a deterministic hashing embedder and answers are extractive. That offline path is what the tests and the desktop demo use.
 
-The Jev client is still the rule backend. `register_decision_backend` is the seam for a later model endpoint; `build_decision_client("remote")` raises until one is registered. Web search is a chain of Google then `WEB_SEARCH_FALLBACK` (default `fallback`). Neither provider calls the network. Freshness checks and connectors are still 501 routes.
+The Jev client is still the rule backend. `register_decision_backend` is the seam for a later model endpoint; `build_decision_client("remote")` raises until one is registered. If that hook is filled in, point it at DeepSeek (`https://api.deepseek.com`, `deepseek-v4-flash`). Gemini and `api.openai.com` time out from mainland China, so they are not the example default. Web search is a chain of Google then `WEB_SEARCH_FALLBACK` (default `fallback`). Neither provider calls the network. M4 does not re-fetch the web; a `web` or `connector` row is marked `unknown`.
+
+Local verify is off unless `FEATURE_VERIFY=1` (the desktop shell forwards `VITE_FEATURE_VERIFY`). While it is off, `POST /verify` and `GET /verify/{job_id}` stay 501 and chat does not re-read files. `needs_verify` is still only a shadow log. While it is on, `POST /verify` with `{"item_ids":[1],"mode":"hash_mtime"}` re-reads `source_path` when that file exists. A changed hash or a newer mtime sets `freshness_state` to `stale` and `prompt_update` to true. The body is left alone until `mode` is `refetch`, which re-ingests and reindexes. A missing or unreadable path sets `unknown` and is never left as `fresh`. The same check runs inside `/chat` when the question hits a freshness cue (`最新`, `现在`, `当前`, and the words already used by the rule client) or when `"verify":"force"`. `"verify":"skip"` still answers and adds a short 未查证 note. Repeated checks inside `VERIFY_DEBOUNCE_S` (default 30) skip the full re-read when the mtime has not moved. Embedding downloads, if you set `EMBED_PROVIDER=bge`, use `HF_ENDPOINT=https://hf-mirror.com` unless you already set one. `huggingface.co` is not the primary.
 
 Offline retrieval baseline, recorded here rather than treated as a production score: on the five-question fixture in `services/sidecar/tests/test_m3_library.py`, top-1 citation accuracy is 5/5 (1.0) with the hashing embedder.
 
@@ -131,12 +133,22 @@ curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json
 
 `POST /clarify/start` with `"skip": true`, or `POST /chat` with `"clarify": "skip"`, writes `brief` = `skipped` and hands that brief to retrieval. `GET /clarify/active` restores an unfinished session after a restart. `CLARIFY_MAX_QUESTIONS` defaults to 7 (1–7). Question text can be polished when `CLARIFY_LLM_API_KEY` or `LLM_API_KEY` is set; otherwise the template is used.
 
+With verify enabled:
+
+```bash
+export FEATURE_VERIFY=1
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" -H "content-type: application/json" \
+  -d '{"item_ids":[1],"mode":"hash_mtime"}' \
+  http://127.0.0.1:8765/verify
+curl -sS -H "x-sidecar-token: $SIDECAR_TOKEN" http://127.0.0.1:8765/verify/1
+```
+
+`mode` `refetch` writes the file back into the library. Without `FEATURE_VERIFY`, both verify routes still return **501**.
+
 These routes still return **501**:
 
 | Method | Path |
 |---|---|
-| POST | `/verify` |
-| GET | `/verify/{job_id}` |
 | GET, POST | `/connectors` |
 | POST | `/connectors/{id}/sync` |
 | GET | `/connectors/{id}/status` |
@@ -151,7 +163,7 @@ alembic upgrade head
 python -c "from app.db.session import init_db; print(init_db())"
 ```
 
-On an empty file the migration creates the v1.0 tables plus v1.1 columns, then M3 adds `fts_chunks` (FTS5 trigram) and `chunk_vector`. On a database that already has v1.0 tables (`content_item`, `conversation`, `message`) it adds the new nullable columns and creates `clarify_session`, `connector_account`, `decision_log`, and `verify_job`, then the M3 index tables. Existing rows get `fetched_at = collected_at` and `freshness_state = 'unknown'`. Head revision is `0002_m3`.
+On an empty file the migration creates the v1.0 tables plus v1.1 columns, then M3 adds `fts_chunks` (FTS5 trigram) and `chunk_vector`, then M4 adds nullable `source_path` and `freshness_reason`. On a database that already has v1.0 tables (`content_item`, `conversation`, `message`) it adds the new nullable columns and creates `clarify_session`, `connector_account`, `decision_log`, and `verify_job`, then the M3 index tables, then the M4 columns. Existing rows get `fetched_at = collected_at` and `freshness_state = 'unknown'`. Head revision is `0003_m4`.
 
 Tests:
 
@@ -176,8 +188,14 @@ The main process picks a free localhost port, starts `uvicorn app.main:app`, and
 3. `<repo>/services/sidecar/.venv/bin/python`
 4. `python3` on `PATH`
 
-The window is the library (import, list, delete, index status) and a chat pane. Citations are buttons; choosing one shows the chunk text and can open the stored file. Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier. Set `VITE_FEATURE_JEV=true` to mount the decision panel. `features.verify` still leaves its panel unmounted.
+The window is the library (import, list, delete, index status) and a chat pane. Citations are buttons; choosing one shows the chunk text and can open the stored file. Feature flags live in `apps/desktop/src/shared/features.ts`. `features.clarify`, `features.jev`, and `features.verify` default to `false`. Set `VITE_FEATURE_CLARIFY=true` (or `1`) before `npm run dev` to mount the clarifier. Set `VITE_FEATURE_JEV=true` to mount the decision panel. Set `VITE_FEATURE_VERIFY=true` to show 查证 on library rows and citations, the stale update prompt, and automatic checks when a question contains a freshness cue. The shell copies that flag to the sidecar as `FEATURE_VERIFY`.
+
+```bash
+VITE_FEATURE_VERIFY=true VITE_FEATURE_JEV=true npm run dev
+```
+
+Import with “按路径导入” when you want 查证 to re-read that same file. A picked file is copied into the library directory and that copy is the source.
 
 ## Not in this revision
 
-M4–M6 are not implemented: no freshness jobs, no connector sync, and no live web search. MediaCrawler is not downloaded. BGE-M3 and the reranker are not loaded unless `EMBED_PROVIDER=bge`. The Jev rule client is not a model endpoint. Google search and the fallback provider raise `SearchUnavailable` instead of calling out. `/verify` and `/connectors` still return 501.
+M5 and M6 are not implemented: no connector sync, and no live web search or web re-fetch. MediaCrawler is not downloaded. BGE-M3 and the reranker are not loaded unless `EMBED_PROVIDER=bge`. The Jev rule client is not a model endpoint. Google search and the fallback provider raise `SearchUnavailable` instead of calling out. `/connectors` still returns 501. `/verify` returns 501 until `FEATURE_VERIFY` is on.

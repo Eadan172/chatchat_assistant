@@ -2,7 +2,7 @@
   "name": "zhihu-connect-engine",
   "version": "0.1.0",
   "private": true,
-  "description": "Local desktop Q&A agent — M3 local library answers",
+  "description": "Local desktop Q&A agent — M4 local freshness checks",
   "workspaces": [
     "apps/desktop"
   ],
