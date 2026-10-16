@@ -58,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         key = self.headers.get("ima-openapi-apikey") or ""
         if key != GOOD_KEY:
-            self._json({"code": 20004, "msg": "apiKey 鉴权失败", "data": {}})
+            self._json({"code": 20004, "msg": "apiKey 鉴权失败", "data": {}}, status=401)
             return
         self._json(self._route(self.path, body))
 
@@ -80,7 +80,19 @@ class Handler(BaseHTTPRequestHandler):
                 "code": 0,
                 "msg": "成功",
                 "data": {
-                    "info_list": [{"id": "kb1", "name": "行业研究", "cover_url": ""}],
+                    "info_list": [
+                        {
+                            "kb_id": "kb1",
+                            "kb_name": "行业研究",
+                            "cover_url": "",
+                            "member_count": 1,
+                            "content_count": 2,
+                            "description": "供应商纪要",
+                            "creator": {},
+                            "role_type": 0,
+                            "base_type": 0,
+                        }
+                    ],
                     "is_end": True,
                     "next_cursor": "",
                 },
@@ -89,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
             return {
                 "code": 0,
                 "msg": "成功",
-                "data": {"infos": {"kb1": {"id": "kb1", "name": "行业研究", "description": "供应商纪要"}}},
+                "data": {"infos": {"kb1": {"kb_id": "kb1", "kb_name": "行业研究"}}},
             }
         if path.endswith("/get_knowledge_list"):
             if body.get("folder_id") == "folder_week":
@@ -173,9 +185,9 @@ class Handler(BaseHTTPRequestHandler):
             return {"code": 0, "msg": "成功", "data": {"content": STATE.note}}
         return {"code": 110012, "msg": "接口无效", "data": {}}
 
-    def _json(self, payload: dict) -> None:
+    def _json(self, payload: dict, status: int = 200) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(raw)))
         self.end_headers()
@@ -267,7 +279,7 @@ def test_wrong_key_is_a_clear_error(client: TestClient, token: str) -> None:
     )
     assert saved.status_code == 401
     detail = saved.json()["detail"]
-    assert "密钥无效" in detail
+    assert "凭据无效" in detail
     assert "agent-interface" in detail
     assert "wrong-key" not in detail
     assert not (Path(os.environ["DATA_DIR"]) / "secrets" / "ima.json").exists()
@@ -278,6 +290,7 @@ def test_list_bases_folders_and_search(client: TestClient, token: str) -> None:
     bases = client.get("/connectors/ima/bases", headers=headers(token))
     assert bases.status_code == 200
     body = bases.json()
+    assert body["knowledge_bases"][0]["id"] == "kb1"
     assert body["knowledge_bases"][0]["name"] == "行业研究"
     assert body["knowledge_bases"][0]["description"] == "供应商纪要"
     assert body["notebooks"][0]["name"] == "工作"
@@ -304,6 +317,9 @@ def test_list_bases_folders_and_search(client: TestClient, token: str) -> None:
     assert found.json()["count"] == len(hits) >= 1
     assert any(hit["kind"] == "note" and hit["id"] == "note123" for hit in hits)
     assert any(hit["kind"] == "media" for hit in hits)
+    kb_calls = [call for call in STATE.calls if str(call.get("path", "")).endswith("/search_knowledge")]
+    assert kb_calls
+    assert kb_calls[0]["body"]["knowledge_base_id"] == "kb1"
     sent = STATE.calls[0]
     assert sent["path"].endswith("/openapi/wiki/v1/search_knowledge_base")
     assert sent["client"] == CLIENT_ID
@@ -497,6 +513,9 @@ def test_smoke_script_prints_counts_only(ima_server: str, tmp_path: Path) -> Non
     assert result.returncode == 0, result.stderr
     assert "list_kb http=200 code=0 count=1" in result.stdout
     assert "search http=200 code=0 count=1" in result.stdout
+    kb_calls = [call for call in STATE.calls if str(call.get("path", "")).endswith("/search_knowledge")]
+    assert kb_calls
+    assert kb_calls[0]["body"]["knowledge_base_id"] == "kb1"
     assert "腾飞" not in result.stdout
     assert "拿铁" not in result.stdout
     assert GOOD_KEY not in result.stdout
@@ -543,6 +562,121 @@ def test_sync_records_error_without_importing_everything(client: TestClient, tok
     status = client.get(f"/connectors/{created['id']}/status", headers=headers(token))
     assert status.json()["last_error"] is None
     assert status.json()["configured"] is True
+
+
+def test_kb_id_fallback_and_unconfirmed_item_keys() -> None:
+    import httpx
+
+    from app.connectors.ima_client import (
+        PATH_GET_KNOWLEDGE_BASE,
+        PATH_LIST_NOTEBOOK,
+        PATH_SEARCH_KNOWLEDGE,
+        PATH_SEARCH_KNOWLEDGE_BASE,
+        PATH_SEARCH_NOTE,
+        ImaClient,
+        ImaError,
+        ImaResult,
+    )
+    from app.connectors.ima_service import (
+        _split_knowledge,
+        knowledge_base_id_of,
+        knowledge_base_name_of,
+        list_overview,
+        search,
+    )
+
+    class Stub:
+        def __init__(self, routes: dict[str, dict]) -> None:
+            self.routes = routes
+            self.sent: list[tuple[str, dict]] = []
+
+        def post(self, path: str, body: dict, cache: bool | None = None) -> ImaResult:
+            self.sent.append((path, body))
+            return ImaResult(http_status=200, code=0, msg="成功", data=self.routes[path], path=path)
+
+    live = Stub(
+        {
+            PATH_SEARCH_KNOWLEDGE_BASE: {
+                "info_list": [
+                    {
+                        "kb_id": "live",
+                        "kb_name": "真库",
+                        "description": "说明",
+                        "cover_url": "",
+                        "member_count": 1,
+                        "content_count": 2,
+                        "creator": {},
+                        "role_type": 0,
+                        "base_type": 0,
+                    }
+                ]
+            },
+            PATH_GET_KNOWLEDGE_BASE: {"infos": {}},
+            PATH_LIST_NOTEBOOK: {"folder_infos": [{"notebook_id": "n1", "folder_name": "本", "note_count": 3}]},
+        }
+    )
+    overview = list_overview(live)  # type: ignore[arg-type]
+    assert overview["knowledge_bases"][0] == {"id": "live", "name": "真库", "description": "说明"}
+    assert overview["notebooks"][0]["id"] == "n1"
+    assert overview["notebooks"][0]["name"] == "本"
+    assert overview["notebooks"][0]["note_count"] == 3
+    assert live.sent[1] == (PATH_GET_KNOWLEDGE_BASE, {"ids": ["live"]})
+    assert knowledge_base_id_of({"id": "old", "name": "旧库"}) == "old"
+    assert knowledge_base_name_of({"id": "old", "name": "旧库"}) == "旧库"
+    assert knowledge_base_id_of({"kb_id": "real", "id": "stale"}) == "real"
+    assert knowledge_base_name_of({"kb_name": "真名", "name": "旧名"}) == "真名"
+    folders, files = _split_knowledge(
+        [
+            {"folderId": "f1", "folder_name": "目录", "file_count": 2, "folder_count": 1},
+            {"knowledge_id": "m1", "file_name": "纪要.pdf", "highlight": "合同"},
+        ],
+        "kb1",
+    )
+    assert folders[0]["id"] == "f1"
+    assert folders[0]["title"] == "目录"
+    assert folders[0]["file_number"] == 2
+    assert files[0]["id"] == "m1"
+    assert files[0]["title"] == "纪要.pdf"
+    assert files[0]["snippet"] == "合同"
+    searcher = Stub(
+        {
+            PATH_SEARCH_NOTE: {"search_note_infos": [{"doc_id": "d1", "name": "标题", "highlight": "片段"}]},
+            PATH_SEARCH_KNOWLEDGE: {"info_list": []},
+        }
+    )
+    found = search(searcher, "词", knowledge_base_id="kb9")  # type: ignore[arg-type]
+    assert found["count"] == 1
+    assert found["hits"][0]["id"] == "d1"
+    assert found["hits"][0]["snippet"] == "片段"
+    assert searcher.sent[1][1]["knowledge_base_id"] == "kb9"
+    notes_only = Stub({PATH_SEARCH_NOTE: {"search_note_infos": []}})
+    assert search(notes_only, "词", knowledge_base_id="")["count"] == 0  # type: ignore[arg-type]
+    assert [path for path, _body in notes_only.sent] == [PATH_SEARCH_NOTE]
+
+    parsed = ImaClient("cid", "bad-secret-key")
+    try:
+        denied = httpx.Response(401, json={"code": 401, "msg": "unauthorized bad-secret-key", "data": {}})
+        with pytest.raises(ImaError) as exc:
+            parsed._parse(PATH_SEARCH_KNOWLEDGE_BASE, denied)
+        assert exc.value.kind == "bad_key"
+        assert "凭据无效" in exc.value.message
+        assert "bad-secret-key" not in exc.value.message
+        empty = httpx.Response(401, content=b"")
+        with pytest.raises(ImaError) as empty_exc:
+            parsed._parse(PATH_SEARCH_KNOWLEDGE_BASE, empty)
+        assert empty_exc.value.kind == "bad_key"
+        assert "凭据无效" in empty_exc.value.message
+        invalid_id = httpx.Response(
+            200,
+            json={"code": 220004, "msg": "invalid knowledge_base_id", "data": {}},
+        )
+        with pytest.raises(ImaError) as api_exc:
+            parsed._parse(PATH_SEARCH_KNOWLEDGE, invalid_id)
+        assert api_exc.value.kind == "api"
+        assert api_exc.value.code == 220004
+        assert "bad-secret-key" not in api_exc.value.message
+    finally:
+        parsed.close()
 
 
 def _save_good_key(client: TestClient, token: str) -> None:

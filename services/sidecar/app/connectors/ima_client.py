@@ -35,8 +35,27 @@ Confirmed from official sources
     ``IMA_API_KEY``, ``IMA_OPENAPI_CLIENTID``, ``IMA_OPENAPI_APIKEY``, and
     ``IMA_BASE_URL`` (default ``https://ima.qq.com``).
 
-Assumed (not stated as a number or schema in those docs)
---------------------------------------------------------
+Confirmed by a real-key self-check (2026-10-16; status codes and field names
+only — response bodies were not read for content)
+-----------------------------------------------------------------------
+* ``search_knowledge_base`` is HTTP 200, business ``code`` 0. Each
+  ``data.info_list`` item uses ``kb_id``, ``kb_name``, ``cover_url``,
+  ``member_count``, ``content_count``, ``description``, ``creator``,
+  ``role_type``, ``base_type``. There is no ``id`` and no ``name``. The skill
+  schema that says ``id`` / ``name`` does not match the live list.
+* ``search_knowledge`` with that ``kb_id`` as ``knowledge_base_id`` is HTTP
+  200, ``code`` 0. ``data`` contains only ``info_list`` (0 items on that
+  call, so fields inside a hit are still unconfirmed). An empty
+  ``knowledge_base_id`` returns business ``code`` 220004
+  ``invalid knowledge_base_id``.
+* ``search_note`` with ``search_type`` 1, ``query_info.content``, ``start``,
+  and ``end`` is HTTP 200, ``code`` 0. The list key is ``search_note_infos``.
+  Fields inside each note were not inspected.
+* A wrong API key is HTTP 401. This client maps HTTP 401/403, and business
+  codes ``20004`` / ``110030``, to the user-facing message 凭据无效.
+
+Assumed (not stated as a number or schema in those docs, and not seen live)
+---------------------------------------------------------------------------
 * No published quota. ``IMA_MIN_INTERVAL_S`` (default 0.2) and
   ``IMA_MAX_PER_MINUTE`` (default 30) are local guards. Wiki ``110021`` and
   notes ``20002`` are treated as rate limits.
@@ -45,16 +64,19 @@ Assumed (not stated as a number or schema in those docs)
   file URL those return) are not cached, so verify can hash the live body.
 * ``get_knowledge_list`` / ``search_knowledge`` mix files and folders but do
   not document a discriminator. An entry is treated as a folder when it has
-  ``folder_id`` without ``media_id``, or ``file_number`` / ``folder_number``,
-  or ``is_folder`` true, or a title ending in ``/``. Otherwise ``media_id`` is
-  an importable file. The skill text says a folder's id in search results is
-  the returned ``media_id``; that case is only recognized by the hints above.
-* HTTP status codes are not specified. Non-JSON or transport failures are
-  "unreachable". HTTP 401/403 and business codes ``20004`` / ``110030`` (or a
-  message that says 鉴权失败) are credential errors.
+  a folder id (``folder_id`` or ``folderId``) without a media id, or
+  ``file_number`` / ``folder_number`` / ``file_count`` / ``folder_count``,
+  or ``is_folder`` / ``isFolder`` true, or a title ending in ``/``.
+  Otherwise ``media_id`` (or ``knowledge_id`` / ``id``) is an importable file.
+  Notebook, note, folder, and knowledge-entry field names other than the
+  containers above are unconfirmed, so the parser accepts several keys.
+* HTTP statuses other than 401 are not specified. Non-JSON or transport
+  failures are "unreachable". HTTP 403 is treated like 401.
 * The official helper sends ``ima-openapi-ctx: skill_version=...``. The API
   reference does not list that header as required, so this client does not
   send it and does not call ``openapi/check_skill_update``.
+* ``get_knowledge_base``'s response shape was not checked live. The list item
+  already carries ``description``, so that call is optional enrichment.
 """
 
 from __future__ import annotations
@@ -102,7 +124,7 @@ MISSING_KEY_MESSAGE = (
     "未配置 ima 密钥。请填写 Client ID 和 API Key，或设置环境变量 IMA_CLIENT_ID 与 IMA_API_KEY。"
 )
 BAD_KEY_MESSAGE = (
-    "ima 密钥无效或没有权限。请到 https://ima.qq.com/agent-interface 重新获取 Client ID 和 API Key。"
+    "ima 凭据无效或没有权限。请到 https://ima.qq.com/agent-interface 重新获取 Client ID 和 API Key。"
 )
 RATE_LIMIT_MESSAGE = "ima 请求过于频繁，请稍后再试。官方配额未公开，本地已限制调用频率。"
 UNREACHABLE_MESSAGE = "无法连接 ima。请检查网络后重试。"

@@ -27,7 +27,7 @@ from app.connectors.ima_client import (  # noqa: E402
     PATH_SEARCH_NOTE,
     ImaError,
 )
-from app.connectors.ima_service import open_ima_client  # noqa: E402
+from app.connectors.ima_service import knowledge_base_id_of, open_ima_client  # noqa: E402
 
 
 def _count(data: dict, key: str) -> int:
@@ -54,9 +54,10 @@ def main() -> int:
             print(_line("list_kb", listed.http_status, listed.code, len(bases)))
             kb_id = ""
             for item in bases:
-                if isinstance(item, dict) and item.get("id"):
-                    kb_id = str(item["id"])
-                    break
+                if isinstance(item, dict):
+                    kb_id = knowledge_base_id_of(item)
+                    if kb_id:
+                        break
             try:
                 if kb_id:
                     found = client.post(

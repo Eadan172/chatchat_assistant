@@ -88,46 +88,52 @@ def public_account(row: ConnectorAccount) -> dict[str, Any]:
     }
 
 
+def knowledge_base_id_of(item: dict[str, Any]) -> str:
+    """Live list items use ``kb_id``. ``id`` / ``knowledge_base_id`` are fallbacks."""
+    return _text(item, "kb_id", "id", "knowledge_base_id")
+
+
+def knowledge_base_name_of(item: dict[str, Any]) -> str:
+    """Live list items use ``kb_name``. ``name`` / ``title`` are fallbacks."""
+    return _text(item, "kb_name", "name", "title")
+
+
 def list_overview(client: ImaClient) -> dict[str, Any]:
     listed = client.post(PATH_SEARCH_KNOWLEDGE_BASE, {"query": "", "cursor": "", "limit": 20})
-    raw_bases = _list(listed.data.get("info_list"))
-    ids = [str(item.get("id")) for item in raw_bases if item.get("id")]
-    details: dict[str, Any] = {}
-    if ids:
-        try:
-            info = client.post(PATH_GET_KNOWLEDGE_BASE, {"ids": ids[:20]})
-            found = info.data.get("infos")
-            if isinstance(found, dict):
-                details = found
-        except ImaError:
-            details = {}
+    raw_bases = _named_list(listed.data, "info_list")
+    ids = [knowledge_base_id_of(item) for item in raw_bases]
+    ids = [kb_id for kb_id in ids if kb_id]
+    details = _knowledge_base_details(client, ids)
     bases = []
     for item in raw_bases:
-        kb_id = str(item.get("id") or "")
+        kb_id = knowledge_base_id_of(item)
         if not kb_id:
             continue
         extra = details.get(kb_id) if isinstance(details.get(kb_id), dict) else {}
         bases.append(
             {
                 "id": kb_id,
-                "name": str(item.get("name") or extra.get("name") or "未命名知识库"),
-                "description": str(extra.get("description") or ""),
+                "name": knowledge_base_name_of(item) or knowledge_base_name_of(extra) or "未命名知识库",
+                "description": _text(item, "description", "desc") or _text(extra, "description", "desc"),
             }
         )
     notebooks: list[dict[str, Any]] = []
     notebook_error = None
     try:
         folders = client.post(PATH_LIST_NOTEBOOK, {"cursor": "0", "limit": 20})
-        for item in _list(folders.data.get("note_folder_infos")):
-            folder_id = str(item.get("folder_id") or "")
+        for item in _named_list(folders.data, "note_folder_infos", "folder_infos", "notebooks"):
+            folder_id = _text(item, "folder_id", "notebook_id", "id")
             if not folder_id:
                 continue
+            note_count = item.get("note_number")
+            if note_count is None:
+                note_count = item.get("note_count")
             notebooks.append(
                 {
                     "id": folder_id,
-                    "name": str(item.get("name") or "未命名笔记本"),
-                    "note_count": item.get("note_number") or 0,
-                    "folder_type": item.get("folder_type"),
+                    "name": _text(item, "name", "folder_name", "title") or "未命名笔记本",
+                    "note_count": note_count or 0,
+                    "folder_type": item.get("folder_type", item.get("type")),
                 }
             )
     except ImaError as exc:
@@ -155,16 +161,16 @@ def list_children(
             {"folder_id": notebook_id, "cursor": cursor or "", "limit": 20, "sort_type": 0},
         )
         items = []
-        for item in _list(result.data.get("note_book_list")):
-            note_id = str(item.get("note_id") or "")
-            if not note_id:
+        for item in _named_list(result.data, "note_book_list", "note_list", "notes"):
+            parsed = _note_fields(item)
+            if parsed is None:
                 continue
             items.append(
                 {
                     "kind": "note",
-                    "id": note_id,
-                    "title": str(item.get("title") or "未命名笔记"),
-                    "summary": str(item.get("summary") or ""),
+                    "id": parsed["id"],
+                    "title": parsed["title"],
+                    "summary": parsed["summary"],
                 }
             )
         return {"folders": [], "items": items, "is_end": bool(result.data.get("is_end", True)), "next_cursor": ""}
@@ -174,15 +180,21 @@ def list_children(
     if folder_id:
         body["folder_id"] = folder_id
     result = client.post(PATH_GET_KNOWLEDGE_LIST, body)
-    folders, items = _split_knowledge(_list(result.data.get("knowledge_list")), knowledge_base_id)
+    folders, items = _split_knowledge(
+        _named_list(result.data, "knowledge_list", "info_list"),
+        knowledge_base_id,
+    )
     return {
         "folders": folders,
         "items": items,
         "is_end": bool(result.data.get("is_end", True)),
         "next_cursor": str(result.data.get("next_cursor") or ""),
         "current_path": [
-            {"id": str(entry.get("folder_id") or ""), "name": str(entry.get("name") or "")}
-            for entry in _list(result.data.get("current_path"))
+            {
+                "id": _text(entry, "folder_id", "id"),
+                "name": _text(entry, "name", "title", "folder_name"),
+            }
+            for entry in _named_list(result.data, "current_path")
         ],
     }
 
@@ -196,19 +208,16 @@ def search(client: ImaClient, query: str, *, knowledge_base_id: str | None = Non
         PATH_SEARCH_NOTE,
         {"search_type": 1, "query_info": {"content": text}, "start": 0, "end": 20},
     )
-    for entry in _list(notes.data.get("search_note_infos")):
-        info = entry.get("note_book_info") if isinstance(entry.get("note_book_info"), dict) else {}
-        note_id = str(info.get("note_id") or "")
-        if not note_id:
+    for entry in _named_list(notes.data, "search_note_infos"):
+        parsed = _note_fields(entry)
+        if parsed is None:
             continue
-        highlight = entry.get("highlightInfo") if isinstance(entry.get("highlightInfo"), dict) else {}
-        snippet = _strip_em(str(highlight.get("doc_title") or info.get("summary") or ""))
         hits.append(
             {
                 "kind": "note",
-                "id": note_id,
-                "title": str(info.get("title") or "未命名笔记"),
-                "snippet": snippet,
+                "id": parsed["id"],
+                "title": parsed["title"],
+                "snippet": parsed["snippet"],
             }
         )
     if knowledge_base_id:
@@ -216,7 +225,8 @@ def search(client: ImaClient, query: str, *, knowledge_base_id: str | None = Non
             PATH_SEARCH_KNOWLEDGE,
             {"query": text, "cursor": "", "knowledge_base_id": knowledge_base_id},
         )
-        folders, items = _split_knowledge(_list(found.data.get("info_list")), knowledge_base_id)
+        # Live ``data`` has only ``info_list``. An empty list is a successful search.
+        folders, items = _split_knowledge(_named_list(found.data, "info_list"), knowledge_base_id)
         for folder in folders:
             hits.append({**folder, "snippet": ""})
         for item in items:
@@ -436,16 +446,19 @@ def _stem(name: str) -> str:
 
 
 def is_folder(entry: dict[str, Any]) -> bool:
-    """Best-effort folder test. The discriminator is not in the official schema."""
-    if entry.get("is_folder") is True:
+    """Best-effort folder test. The live discriminator is not confirmed."""
+    if entry.get("is_folder") is True or entry.get("isFolder") is True:
         return True
-    has_media = bool(entry.get("media_id"))
-    has_folder = bool(entry.get("folder_id"))
+    kind = _text(entry, "type", "item_type", "knowledge_type").lower()
+    if kind in {"folder", "dir", "directory"}:
+        return True
+    has_media = bool(_media_id_of(entry))
+    has_folder = bool(_text(entry, "folder_id", "folderId"))
     if has_folder and not has_media:
         return True
-    if "file_number" in entry or "folder_number" in entry:
+    if any(key in entry for key in ("file_number", "folder_number", "file_count", "folder_count")):
         return True
-    title = str(entry.get("title") or entry.get("name") or "")
+    title = _text(entry, "title", "name", "folder_name", "file_name")
     return title.endswith("/") and not has_media
 
 
@@ -454,33 +467,111 @@ def _split_knowledge(entries: list[dict[str, Any]], knowledge_base_id: str) -> t
     items: list[dict[str, Any]] = []
     for entry in entries:
         if is_folder(entry):
-            folder_id = str(entry.get("folder_id") or entry.get("media_id") or "")
+            folder_id = _text(entry, "folder_id", "folderId", "media_id", "id")
             if not folder_id:
                 continue
+            file_number = entry.get("file_number")
+            if file_number is None:
+                file_number = entry.get("file_count")
+            folder_number = entry.get("folder_number")
+            if folder_number is None:
+                folder_number = entry.get("folder_count")
             folders.append(
                 {
                     "kind": "folder",
                     "id": folder_id,
-                    "title": str(entry.get("name") or entry.get("title") or "未命名文件夹").rstrip("/"),
-                    "file_number": entry.get("file_number"),
-                    "folder_number": entry.get("folder_number"),
+                    "title": (
+                        _text(entry, "name", "folder_name", "title", "file_name") or "未命名文件夹"
+                    ).rstrip("/"),
+                    "file_number": file_number,
+                    "folder_number": folder_number,
                     "knowledge_base_id": knowledge_base_id,
                 }
             )
             continue
-        media_id = str(entry.get("media_id") or "")
+        media_id = _media_id_of(entry) or _text(entry, "id")
         if not media_id:
             continue
         items.append(
             {
                 "kind": "media",
                 "id": media_id,
-                "title": str(entry.get("title") or "未命名文件"),
-                "snippet": str(entry.get("highlight_content") or ""),
+                "title": _text(entry, "title", "name", "file_name") or "未命名文件",
+                "snippet": _text(entry, "highlight_content", "highlight", "snippet", "summary"),
                 "knowledge_base_id": knowledge_base_id,
             }
         )
     return folders, items
+
+
+def _knowledge_base_details(client: ImaClient, ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not ids:
+        return {}
+    try:
+        info = client.post(PATH_GET_KNOWLEDGE_BASE, {"ids": ids[:20]})
+    except ImaError:
+        return {}
+    found = info.data.get("infos")
+    mapped: dict[str, dict[str, Any]] = {}
+    if isinstance(found, dict):
+        for key, value in found.items():
+            if not isinstance(value, dict):
+                continue
+            mapped[knowledge_base_id_of(value) or str(key)] = value
+        return mapped
+    for value in _list(found):
+        kb_id = knowledge_base_id_of(value)
+        if kb_id:
+            mapped[kb_id] = value
+    return mapped
+
+
+def _note_fields(entry: dict[str, Any]) -> dict[str, str] | None:
+    info = _nested(entry, "note_book_info", "noteBookInfo", "note_info", "note") or entry
+    note_id = _text(info, "note_id", "doc_id", "docid", "id") or _text(entry, "note_id", "doc_id", "docid", "id")
+    if not note_id:
+        return None
+    highlight = _nested(entry, "highlightInfo", "highlight_info") or {}
+    title = _text(info, "title", "name") or _strip_em(_text(highlight, "doc_title")) or "未命名笔记"
+    summary = _text(info, "summary", "abstract")
+    snippet = _strip_em(
+        _text(highlight, "doc_title", "highlight_content", "content")
+        or _text(entry, "highlight_content", "highlight", "snippet")
+        or summary
+    )
+    return {"id": note_id, "title": title, "summary": summary, "snippet": snippet}
+
+
+def _media_id_of(entry: dict[str, Any]) -> str:
+    return _text(entry, "media_id", "knowledge_id")
+
+
+def _nested(entry: dict[str, Any], *keys: str) -> dict[str, Any] | None:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, dict) and value:
+            return value
+    return None
+
+
+def _named_list(data: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
+    """First present key wins, including an empty list. Later keys are fallbacks."""
+    for key in keys:
+        if key in data:
+            return _list(data.get(key))
+    return []
+
+
+def _text(entry: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned
+        elif isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+    return ""
 
 
 def _list(value: Any) -> list[dict[str, Any]]:
