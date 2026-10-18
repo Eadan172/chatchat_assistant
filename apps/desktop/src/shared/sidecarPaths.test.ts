@@ -20,6 +20,28 @@ describe('sidecar path allowlist', () => {
     expect(allowedSidecarPath('GET', '/library/import')).toBe(false)
   })
 
+  it('allows the M7 memory, import channel, style and preference routes', () => {
+    expect(allowedSidecarPath('GET', '/conversations?limit=200')).toBe(true)
+    expect(allowedSidecarPath('POST', '/conversations')).toBe(true)
+    expect(allowedSidecarPath('GET', '/conversations/12')).toBe(true)
+    expect(allowedSidecarPath('PATCH', '/conversations/12')).toBe(true)
+    expect(allowedSidecarPath('DELETE', '/conversations/12')).toBe(true)
+    expect(allowedSidecarPath('POST', '/conversations/12/fork')).toBe(true)
+    expect(allowedSidecarPath('POST', '/conversations/clear')).toBe(true)
+    expect(allowedSidecarPath('GET', '/conversations/12/export?format=md')).toBe(true)
+    expect(allowedSidecarPath('GET', '/folders')).toBe(true)
+    expect(allowedSidecarPath('PATCH', '/folders/3')).toBe(true)
+    expect(allowedSidecarPath('GET', '/projects')).toBe(true)
+    expect(allowedSidecarPath('GET', '/import/sources?locale=en')).toBe(true)
+    expect(allowedSidecarPath('POST', '/import/sources/obsidian/browse')).toBe(true)
+    expect(allowedSidecarPath('POST', '/import/documents')).toBe(true)
+    expect(allowedSidecarPath('GET', '/styles?locale=zh')).toBe(true)
+    expect(allowedSidecarPath('GET', '/settings/app')).toBe(true)
+    expect(allowedSidecarPath('POST', '/settings/ui')).toBe(true)
+    expect(allowedSidecarPath('DELETE', '/conversations/abc')).toBe(false)
+    expect(allowedSidecarPath('GET', '/import/documents')).toBe(false)
+  })
+
   it('still allows chat and clarify, and blocks other routes', () => {
     expect(allowedSidecarPath('POST', '/chat')).toBe(true)
     expect(allowedSidecarPath('POST', '/ask')).toBe(true)

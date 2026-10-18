@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useI18n } from '../../i18n'
 import { errorMessage, sidecarRequest, type SidecarResult } from './client'
 import {
   formatProgress,
@@ -19,16 +20,17 @@ function asPayload(data: unknown): ClarifyPayload | null {
   return row as ClarifyPayload
 }
 
-function deltaText(result: SidecarResult): string {
+function deltaText(result: SidecarResult, fallback: string): string {
   const delta = result.events?.find((item) => item.event === 'delta')
   if (delta && delta.data && typeof delta.data === 'object' && 'text' in delta.data) {
     const text = (delta.data as { text: unknown }).text
     if (typeof text === 'string') return text
   }
-  return '澄清结果已交给问答。'
+  return fallback
 }
 
 export function ClarifyPanel() {
+  const { t, tf } = useI18n()
   const [keyword, setKeyword] = useState('')
   const [domainHint, setDomainHint] = useState('')
   const [payload, setPayload] = useState<ClarifyPayload | null>(null)
@@ -70,7 +72,7 @@ export function ClarifyPanel() {
     try {
       await task()
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '请求失败')
+      setError(caught instanceof Error ? caught.message : t('请求失败'))
     } finally {
       setPending(false)
     }
@@ -100,16 +102,16 @@ export function ClarifyPanel() {
       mode: 'personal',
       sources: ['local'],
     })
-    if (!chat.ok) throw new Error(chat.error || errorMessage(chat.data, '问答请求失败'))
+    if (!chat.ok) throw new Error(chat.error || errorMessage(chat.data, t('问答请求失败')))
     setPayload(next)
     setRevising(null)
-    setChatNote(deltaText(chat))
+    setChatNote(deltaText(chat, t('澄清结果已交给问答。')))
   }
 
   return (
     <section data-feature="clarify" className="mt-6 rounded-2xl bg-white/80 p-5 shadow-sm ring-1 ring-pool">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-medium text-sage">澄清</h2>
+        <h2 className="text-sm font-medium text-sage">{t('澄清')}</h2>
         {payload ? (
           <p data-clarify-progress className="text-xs text-slate-500">
             {formatProgress(payload.tree_progress)}
@@ -129,12 +131,12 @@ export function ClarifyPanel() {
                 keyword: text,
                 domain_hint: domainHint || null,
               })
-              show(take(result, '没能开始澄清'))
+              show(take(result, t('没能开始澄清')))
             })
           }}
         >
           <label className="block text-sm text-slate-600" htmlFor="clarify-keyword">
-            想搞清楚什么？
+            {t('想搞清楚什么？')}
           </label>
           <input
             id="clarify-keyword"
@@ -142,20 +144,20 @@ export function ClarifyPanel() {
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
             className="w-full rounded-xl border border-pool bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sage/40"
-            placeholder="例如：考研数学复盘怎么做"
+            placeholder={t('例如：考研数学复盘怎么做')}
           />
           <label className="block text-xs text-slate-500" htmlFor="clarify-domain">
-            领域
+            {t('领域')}
             <select
               id="clarify-domain"
               value={domainHint}
               onChange={(event) => setDomainHint(event.target.value)}
               className="ml-2 rounded-lg border border-pool bg-white px-2 py-1"
             >
-              <option value="">通用</option>
-              <option value="learning">学习</option>
-              <option value="work">工作</option>
-              <option value="life">生活</option>
+              <option value="">{t('通用')}</option>
+              <option value="learning">{t('学习')}</option>
+              <option value="work">{t('工作')}</option>
+              <option value="life">{t('生活')}</option>
             </select>
           </label>
           <div className="flex flex-wrap gap-2">
@@ -164,7 +166,7 @@ export function ClarifyPanel() {
               disabled={pending}
               className="rounded-full bg-sage px-4 py-2 text-sm text-white disabled:opacity-60"
             >
-              开始澄清
+              {t('开始澄清')}
             </button>
             <button
               type="button"
@@ -174,7 +176,7 @@ export function ClarifyPanel() {
               onClick={() => {
                 const text = keyword.trim()
                 if (!text) {
-                  setError('请先写下一个关键词')
+                  setError(t('请先写下一个关键词'))
                   return
                 }
                 void run(async () => {
@@ -183,11 +185,11 @@ export function ClarifyPanel() {
                     domain_hint: domainHint || null,
                     skip: true,
                   })
-                  await handoff(take(result, '没能跳过澄清'), 'skip')
+                  await handoff(take(result, t('没能跳过澄清')), 'skip')
                 })
               }}
             >
-              跳过澄清
+              {t('跳过澄清')}
             </button>
           </div>
         </form>
@@ -210,7 +212,7 @@ export function ClarifyPanel() {
                 value: null,
                 park_reason: null,
               })
-              show(take(result, '没能采纳'))
+              show(take(result, t('没能采纳')))
             })
           }
           onEdit={() =>
@@ -220,7 +222,7 @@ export function ClarifyPanel() {
                 action: 'edit',
                 value: draft,
               })
-              show(take(result, '没能保存修改'))
+              show(take(result, t('没能保存修改')))
             })
           }
           onPark={() =>
@@ -230,13 +232,13 @@ export function ClarifyPanel() {
                 action: 'park',
                 park_reason: parkReason.trim() || null,
               })
-              show(take(result, '没能搁置'))
+              show(take(result, t('没能搁置')))
             })
           }
           onSkip={() =>
             void run(async () => {
               const result = await sidecarRequest('POST', `/clarify/${payload.session_id}/confirm`, { skip: true })
-              await handoff(take(result, '没能跳过澄清'), 'skip')
+              await handoff(take(result, t('没能跳过澄清')), 'skip')
             })
           }
         />
@@ -244,11 +246,11 @@ export function ClarifyPanel() {
 
       {phase === 'recap' && payload?.brief ? (
         <div data-clarify-recap className="mt-4 space-y-3">
-          <h3 className="text-base font-medium">先对一下已经决定的事</h3>
-          <p className="text-sm text-slate-600">关于「{payload.keyword}」</p>
+          <h3 className="text-base font-medium">{t('先对一下已经决定的事')}</h3>
+          <p className="text-sm text-slate-600">{tf('关于「{keyword}」', { keyword: payload.keyword })}</p>
           {payload.brief.success_criteria ? (
             <p className="text-sm">
-              <span className="text-slate-500">成功标准 · </span>
+              <span className="text-slate-500">{t('成功标准 ·')} </span>
               {payload.brief.success_criteria}
             </p>
           ) : null}
@@ -257,7 +259,9 @@ export function ClarifyPanel() {
               <li key={item.id} className="rounded-xl bg-mist/70 px-3 py-2 text-sm">
                 <p className="text-slate-600">{item.text}</p>
                 <p className="mt-1">
-                  {item.status === 'parked' ? `搁置：${item.park_reason || '先不答'}` : item.decision}
+                  {item.status === 'parked'
+                    ? tf('搁置：{reason}', { reason: item.park_reason || t('先不答') })
+                    : item.decision}
                 </p>
               </li>
             ))}
@@ -271,11 +275,11 @@ export function ClarifyPanel() {
               onClick={() =>
                 void run(async () => {
                   const result = await sidecarRequest('POST', `/clarify/${payload.session_id}/confirm`, {})
-                  await handoff(take(result, '没能确认'), 'auto')
+                  await handoff(take(result, t('没能确认')), 'auto')
                 })
               }
             >
-              确认并检索
+              {t('确认并检索')}
             </button>
             <button
               type="button"
@@ -290,7 +294,7 @@ export function ClarifyPanel() {
                 setChatNote(null)
               }}
             >
-              继续改
+              {t('继续改')}
             </button>
           </div>
         </div>
@@ -298,9 +302,9 @@ export function ClarifyPanel() {
 
       {phase === 'revise' && payload && revising ? (
         <article data-clarify-question={revising.id} className="mt-4 space-y-3">
-          <p className="text-xs text-slate-500">继续改这一题</p>
+          <p className="text-xs text-slate-500">{t('继续改这一题')}</p>
           <h3 className="text-base font-medium">{revising.text}</h3>
-          <p className="text-sm text-slate-600">推荐：{revising.recommendation}</p>
+          <p className="text-sm text-slate-600">{tf('推荐：{text}', { text: revising.recommendation })}</p>
           <form
             className="flex flex-wrap gap-2"
             onSubmit={(event) => {
@@ -311,7 +315,7 @@ export function ClarifyPanel() {
                   action: 'edit',
                   value: draft,
                 })
-                show(take(result, '没能保存修改'))
+                show(take(result, t('没能保存修改')))
               })
             }}
           >
@@ -321,10 +325,10 @@ export function ClarifyPanel() {
               className="min-w-0 flex-1 rounded-xl border border-pool px-3 py-2 text-sm"
             />
             <button type="submit" disabled={pending} className="rounded-full bg-sage px-4 py-2 text-sm text-white">
-              保存修改
+              {t('保存修改')}
             </button>
             <button type="button" className="rounded-full px-4 py-2 text-sm text-sage" onClick={() => setRevising(null)}>
-              返回复述
+              {t('返回复述')}
             </button>
           </form>
         </article>
@@ -343,7 +347,7 @@ export function ClarifyPanel() {
               setError(null)
             }}
           >
-            再澄清一个
+            {t('再澄清一个')}
           </button>
         </div>
       ) : null}
@@ -382,9 +386,10 @@ function QuestionCard({
   onPark: () => void
   onSkip: () => void
 }) {
+  const { t, tf } = useI18n()
   return (
     <article data-clarify-question={question.id} className="mt-4 space-y-3" aria-live="polite">
-      <p className="text-xs text-slate-500">关于「{keyword}」</p>
+      <p className="text-xs text-slate-500">{tf('关于「{keyword}」', { keyword })}</p>
       <h3 className="text-base font-medium">{question.text}</h3>
       <button
         type="button"
@@ -393,7 +398,7 @@ function QuestionCard({
         onClick={onAccept}
         className="rounded-full bg-pool px-3 py-2 text-left text-sm text-ink disabled:opacity-60"
       >
-        采纳：{question.recommendation}
+        {tf('采纳：{text}', { text: question.recommendation })}
       </button>
       <p className="text-xs text-slate-500">{question.reason}</p>
       <form
@@ -406,7 +411,7 @@ function QuestionCard({
         <input
           value={draft}
           onChange={(event) => onDraft(event.target.value)}
-          placeholder="改成…"
+          placeholder={t('改成…')}
           className="min-w-0 flex-1 rounded-xl border border-pool px-3 py-2 text-sm"
         />
         <button
@@ -415,14 +420,14 @@ function QuestionCard({
           disabled={pending}
           className="rounded-full bg-sage px-4 py-2 text-sm text-white disabled:opacity-60"
         >
-          改成这样
+          {t('改成这样')}
         </button>
       </form>
       <div className="flex flex-wrap items-center gap-2">
         <input
           value={parkReason}
           onChange={(event) => onParkReason(event.target.value)}
-          placeholder="搁置原因（可选）"
+          placeholder={t('搁置原因（可选）')}
           className="min-w-0 flex-1 rounded-xl border border-pool px-3 py-2 text-sm"
         />
         <button
@@ -432,10 +437,10 @@ function QuestionCard({
           onClick={onPark}
           className="rounded-full px-4 py-2 text-sm text-sage disabled:opacity-60"
         >
-          先搁置
+          {t('先搁置')}
         </button>
         <button type="button" data-action="skip" disabled={pending} onClick={onSkip} className="text-sm text-slate-500">
-          跳过澄清
+          {t('跳过澄清')}
         </button>
       </div>
     </article>

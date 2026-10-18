@@ -80,7 +80,7 @@ export async function startSidecar(): Promise<string> {
     env: {
       ...process.env,
       SIDECAR_TOKEN: sidecarToken,
-      DATA_DIR: app.getPath('userData'),
+      DATA_DIR: process.env.DATA_DIR || app.getPath('userData'),
       PYTHONUNBUFFERED: '1',
       // The renderer reads VITE_FEATURE_*. Pass the same switches to Python.
       FEATURE_VERIFY: flagValue('FEATURE_VERIFY'),

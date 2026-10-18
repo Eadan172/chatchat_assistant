@@ -7,6 +7,7 @@ a failed model call falls back to the rule decider and a grouped list.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
@@ -25,6 +26,7 @@ from app.connectors.ima_secrets import configured as ima_configured
 from app.decision.client import DecisionUnavailable, RuleBasedDecisionClient, build_decision_client
 from app.decision.policies import need_clarify, route_channels
 from app.freshness.policies import apply_chat_freshness, verify_enabled
+from app.i18n import t
 from app.retrieval.hybrid import scope_text
 from app.web_search.live import search_web
 from app.web_search.page import enrich_web_hits
@@ -58,11 +60,15 @@ def iter_ask(
     skip_rest: bool,
     registry,
     db,
+    locale: str = "zh",
+    style: dict[str, Any] | None = None,
+    conversation_id: int | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     install_redaction()
     text = (message or "").strip()
     if session_id is None and not text:
-        raise ClarifyError(422, "请填写问题")
+        raise ClarifyError(422, t("ask.empty_question", locale))
     name = (kb_name or "").strip()
     if session_id is not None:
         view = _advance(db, session_id, answers or [], skip_rest=skip_rest)
@@ -81,6 +87,10 @@ def iter_ask(
             verify=verify,
             clarify=clarify,
             registry=registry,
+            locale=locale,
+            style=style,
+            conversation_id=conversation_id,
+            history=history,
         )
         return
 
@@ -91,7 +101,7 @@ def iter_ask(
         view = start_session(
             db,
             keyword=text,
-            conversation_id=None,
+            conversation_id=conversation_id,
             domain_hint=None,
             skip=False,
             max_questions=FOOD_CLARIFY_LIMIT if probe else ASK_CLARIFY_LIMIT,
@@ -102,7 +112,7 @@ def iter_ask(
     view = start_session(
         db,
         keyword=text,
-        conversation_id=None,
+        conversation_id=conversation_id,
         domain_hint=None,
         skip=True,
         max_questions=ASK_CLARIFY_LIMIT,
@@ -118,6 +128,10 @@ def iter_ask(
         verify=verify,
         clarify="skip",
         registry=registry,
+        locale=locale,
+        style=style,
+        conversation_id=conversation_id,
+        history=history,
     )
 
 
@@ -161,6 +175,10 @@ def _search_and_answer(
     verify: str,
     clarify: str,
     registry,
+    locale: str = "zh",
+    style: dict[str, Any] | None = None,
+    conversation_id: int | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     import time
 
@@ -169,15 +187,16 @@ def _search_and_answer(
 
     started = time.perf_counter()
     question = refined_question(message, brief)
+    search_question = _followup_query(question, history)
     routed_clarify = "skip" if _clarified(brief) else clarify
-    plan = decide(question, brief=brief, kb_name=kb_name, clarify=routed_clarify)
+    plan = decide(search_question, brief=brief, kb_name=kb_name, clarify=routed_clarify)
     sources = [name for name in SOURCE_ORDER if name in plan.sources]
     queries = [item.strip() for item in plan.queries if item and item.strip()]
     if not _clarified(brief):
-        original = (message or "").strip()
+        original = (search_question or "").strip()
         if original and original not in queries:
             queries.append(original)
-    queries = queries[:3] or [question or message]
+    queries = queries[:3] or [search_question or message]
     yield "searching", {"sources": sources, "queries": queries, "backend": plan.backend, "fallback": plan.fallback}
     logger.info("ask search sources=%s backend=%s query_count=%s", ",".join(sources), plan.backend, len(queries))
     groups, notices = _retrieve(
@@ -202,11 +221,14 @@ def _search_and_answer(
         return complete_deepseek(messages)
 
     result = synthesize(
-        question or queries[0],
+        search_question or queries[0],
         groups,
         registry=registry,
         complete=None if missing_key else complete,
         missing_key=missing_key,
+        locale=locale,
+        style_directive=style.get("directive") if isinstance(style, dict) else None,
+        history=history,
     )
     if verify_enabled():
         local_hits = groups.get("local") or []
@@ -221,12 +243,12 @@ def _search_and_answer(
     for piece in _deltas(result.text):
         yield "delta", {"text": piece}
     row = db.get(ClarifySession, int(session_view["session_id"]))
-    conversation_id = None
+    turn_conversation_id = None
     if row is not None:
-        conversation_id = attach_chat_turn(
+        turn_conversation_id = attach_chat_turn(
             db,
             session_row=row,
-            conversation_id=session_view.get("conversation_id"),
+            conversation_id=session_view.get("conversation_id") or conversation_id,
             user_text=message,
             assistant_text=result.text,
             mode=mode,
@@ -247,7 +269,7 @@ def _search_and_answer(
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
         "latency_ms": int((time.perf_counter() - started) * 1000),
-        "conversation_id": conversation_id,
+        "conversation_id": turn_conversation_id or conversation_id,
         "session_id": session_view.get("session_id"),
         "backend": plan.backend,
         "fallback": plan.fallback,
@@ -285,8 +307,31 @@ def _retrieve(
     return groups, notices
 
 
-WEB_SEARCH_LIMIT = 20
+def _web_result_limit() -> int:
+    raw = (os.getenv("WEB_SEARCH_RESULTS") or "20").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 20
+    return min(max(value, 1), 20)
+
+
+WEB_SEARCH_LIMIT = _web_result_limit()
 _SITE_FILTERS = ("site:dianping.com", "site:xiaohongshu.com")
+
+
+def _web_query_budget() -> int:
+    """Cap Serper/SerpApi/Tavily calls per question (each call costs a credit).
+
+    ``0`` keeps the historical behaviour (every expanded query); set
+    ``WEB_SEARCH_MAX_QUERIES`` to a positive number to bound spending.
+    """
+    raw = (os.getenv("WEB_SEARCH_MAX_QUERIES") or "0").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return 0 if value <= 0 else min(value, 8)
 
 
 def _search_web(queries: list[str], *, context: str = "") -> tuple[list[dict[str, Any]], list[str]]:
@@ -296,7 +341,12 @@ def _search_web(queries: list[str], *, context: str = "") -> tuple[list[dict[str
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     notices: list[str] = []
-    for query in _expanded_web_queries(queries):
+    budget = _web_query_budget()
+    expanded = _expanded_web_queries(queries)
+    if budget > 0 and len(expanded) > budget:
+        logger.info("web query budget applied: %s -> %s", len(expanded), budget)
+        expanded = expanded[:budget]
+    for query in expanded:
         found = search_web(query, limit=WEB_SEARCH_LIMIT)
         if found.notice and found.notice not in notices:
             notices.append(found.notice)
@@ -476,15 +526,42 @@ def _rule_plan(message: str, brief: dict[str, Any] | None, kb_name: str, clarify
     return Plan(answer, sources, queries[:3], "rule", fallback)
 
 
-_LIFE = ("美食", "餐厅", "饭店", "餐馆", "小吃", "景点", "旅游", "旅行", "出行", "酒店", "攻略", "附近", "游玩", "去玩", "玩", "日料", "料理", "寿司")
+_LIFE = ("美食", "餐厅", "饭店", "餐馆", "小吃", "景点", "旅游", "旅行", "出行", "酒店", "攻略", "附近", "日料", "料理", "寿司", "露营", "民宿")
+_LIFE_PHRASES = ("哪里好玩", "哪儿好玩", "去哪玩", "去哪里玩", "有什么好玩", "周末去哪")
 _LIBRARY = ("笔记", "本地", "知识库", "ima", "收藏", "文件")
 
 
+_PRONOUNS = ("它", "他", "她", "这个", "那个", "该", "上述", "前面", "这", "那", "其", "这项", "这款")
+
+
+def _followup_query(message: str, history: list[dict[str, Any]] | None) -> str:
+    """Resolve a short follow-up ("它支持什么？") against the previous user turn."""
+    text = (message or "").strip()
+    if not history or not text:
+        return text
+    last_user = ""
+    for row in reversed(history):
+        if row.get("role") == "user" and str(row.get("content") or "").strip():
+            last_user = str(row["content"]).strip()
+            break
+    if not last_user or last_user == text:
+        return text
+    if len(text) <= 20 and any(mark in text for mark in _PRONOUNS):
+        return f"{last_user} {text}"
+    return text
+
+
 def life_web_only(text: str) -> bool:
-    """Food, place, and travel questions are answered from the live web."""
+    """Food, place, and travel questions are answered from the live web.
+
+    Generic “好玩/玩” is not enough: “魔都森林好玩吗” is a question about a
+    specific venue and must still search the local library.
+    """
     blob = text or ""
     if any(mark.lower() in blob.lower() for mark in _LIBRARY):
         return False
+    if any(phrase in blob for phrase in _LIFE_PHRASES):
+        return True
     return any(mark in blob for mark in _LIFE)
 
 
@@ -517,9 +594,13 @@ def _clarified(brief: dict[str, Any] | None) -> bool:
 
 def _route_sources(sources: list[str], message: str, kb_name: str) -> list[str]:
     ordered = _with_named_kb(sources, kb_name)
+    # Unnamed questions still search the local library first; only pure local-life
+    # questions (nearby food / travel) skip it and stay on the live web.
     if life_web_only(message) and not (kb_name or "").strip():
         return ["web"]
-    return ordered
+    if "local" not in ordered:
+        ordered = ["local", *ordered]
+    return [name for name in SOURCE_ORDER if name in ordered]
 
 
 def _with_named_kb(sources: list[str], kb_name: str) -> list[str]:

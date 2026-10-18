@@ -2,6 +2,24 @@
 
 export function allowedSidecarPath(method: string, requestPath: string): boolean {
   const pathOnly = (requestPath.split('?')[0] || '/').trim()
+
+  // M7: conversation memory, folders, projects (GET/POST/PATCH/DELETE).
+  if (/^\/(conversations|folders|projects)(\/.*)?$/.test(pathOnly)) {
+    if (method === 'DELETE') {
+      return /^\/(conversations|folders|projects)\/\d+$/.test(pathOnly)
+    }
+    return method === 'GET' || method === 'POST' || method === 'PATCH'
+  }
+  // M7: unified import channels.
+  if (pathOnly === '/import/documents') return method === 'POST'
+  if (/^\/import\/sources(\/[^/]+(\/(browse|import))?)?$/.test(pathOnly)) {
+    return method === 'GET' || method === 'POST'
+  }
+  // M7: style catalog, preferences, deployment info.
+  if (pathOnly === '/styles' || pathOnly === '/settings/app' || pathOnly === '/settings/ui') {
+    return method === 'GET' || method === 'POST'
+  }
+
   if (method === 'DELETE') {
     return /^\/library\/items\/\d+$/.test(pathOnly) || /^\/connectors\/\d+$/.test(pathOnly) || pathOnly === '/settings/ima'
   }

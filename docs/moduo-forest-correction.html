@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>更正说明：魔都森林 ≠ The Big Things Playground</title>
+<style>
+  :root {
+    --mist: #e7f2ec;
+    --sage: #5f8f78;
+    --pool: #d7e6f2;
+    --ink: #243038;
+    --muted: #5b6b73;
+    --line: #cfded6;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --bad: #b91c1c;
+    --bad-bg: #fee2e2;
+    --good: #166534;
+    --good-bg: #dcfce7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--mist);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.65;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 64px; }
+  header.hero {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 28px 30px;
+    box-shadow: 0 10px 30px rgba(36, 48, 56, 0.06);
+  }
+  .eyebrow { color: var(--sage); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 8px; }
+  h1 { font-size: 30px; line-height: 1.3; margin: 0 0 10px; }
+  .wrong { text-decoration: line-through; text-decoration-color: var(--bad); text-decoration-thickness: 2px; color: #7a8790; }
+  .lede { margin: 0; color: var(--muted); font-size: 15px; }
+  .verdict {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    margin-top: 20px; padding: 14px 16px; border-radius: 14px;
+    background: var(--mist); border: 1px solid var(--line);
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  }
+  .badge.good { background: var(--good-bg); color: var(--good); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  section.card {
+    background: #fff; border: 1px solid var(--line); border-radius: 20px;
+    padding: 24px 26px; margin-top: 18px;
+  }
+  h2 { font-size: 19px; margin: 0 0 6px; }
+  h2 .num {
+    display: inline-grid; place-items: center; width: 26px; height: 26px;
+    margin-right: 8px; border-radius: 8px; background: var(--pool);
+    color: var(--ink); font-size: 13px;
+  }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 8px 0 4px; }
+  .step {
+    position: relative; background: #f7faf8; border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px 12px 14px; font-size: 13px;
+  }
+  .step b { display: block; font-size: 12px; color: var(--sage); margin-bottom: 4px; }
+  .step:not(:last-child)::after {
+    content: "→"; position: absolute; right: -9px; top: 50%; transform: translateY(-50%);
+    color: var(--sage); font-size: 14px; background: #fff; padding: 0 2px;
+  }
+  .step.bad { border-color: #fecaca; background: #fff7f7; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; }
+  th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid #e6eeea; vertical-align: top; overflow-wrap: anywhere; }
+  th { font-size: 12px; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .col-a { background: #f2f8f4; }
+  .col-b { background: #fff8ec; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+  .pill.ok { background: var(--good-bg); color: var(--good); }
+  .pill.no { background: var(--bad-bg); color: var(--bad); }
+  .pill.mid { background: var(--warn-bg); color: var(--warn); }
+  .chart { margin-top: 6px; }
+  .bar-row { display: grid; grid-template-columns: 200px 1fr 56px; align-items: center; gap: 12px; margin: 10px 0; font-size: 13px; }
+  .track { height: 14px; background: #eef4f0; border-radius: 999px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #7fb39b, var(--sage)); }
+  .fill.low { background: linear-gradient(90deg, #e7c27d, #b45309); }
+  .fill.flat { background: linear-gradient(90deg, #9fc6dd, #5b8fb0); }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .matrix { display: grid; grid-template-columns: 1.2fr 1fr; gap: 10px; margin-top: 6px; }
+  .mrow {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); font-size: 13px;
+  }
+  .mrow span:first-child { font-weight: 500; }
+  .bullets { margin: 8px 0 0; padding-left: 20px; }
+  .bullets li { margin: 6px 0; }
+  .callout {
+    border-left: 4px solid var(--sage); background: #f6fbf8;
+    padding: 12px 14px; border-radius: 0 10px 10px 0; font-size: 14px; margin: 14px 0 0;
+  }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .mini { border: 1px dashed var(--line); border-radius: 12px; padding: 12px 14px; font-size: 13px; }
+  .mini h4 { margin: 0 0 6px; font-size: 13px; }
+  .meter { display: grid; grid-template-columns: 170px 1fr 44px; gap: 12px; align-items: center; font-size: 13px; margin: 8px 0; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 22px; padding: 0 4px; }
+  @media (max-width: 720px) {
+    .flow { grid-template-columns: 1fr 1fr; }
+    .step:not(:last-child)::after { display: none; }
+    .bar-row { grid-template-columns: 130px 1fr 46px; }
+    .two, .matrix { grid-template-columns: 1fr; }
+    h1 { font-size: 24px; }
+  }
+  @media print {
+    body { background: #fff; }
+    section.card, header.hero { box-shadow: none; break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <p class="eyebrow">更正说明 · 实体核对</p>
+    <h1><span class="wrong">「魔都森林」是 The Big Things Playground</span><br />这个判断不成立</h1>
+    <p class="lede">
+      “魔都”指上海。你在点评上看到的「魔都森林」是上海的一个游玩项目；摘录里的
+      The Big Things Playground 是另一处室内丛林亲子乐园（4000 呎、18 个游戏区域、芬兰设计师设计、芬兰松木设施）。
+      两者名称、城市、业态都不同，不能把后者的属性算到前者头上。
+    </p>
+    <div class="verdict">
+      <span class="badge good">实体纠错：高置信</span>
+      <span class="badge warn">魔都森林具体评分：未取得</span>
+      <span class="badge bad">原结论：作废</span>
+      <span style="font-size:13px;color:var(--muted)">重新判断见第 3 节</span>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2><span class="num">1</span>错误是怎么产生的</h2>
+    <p class="sub">典型的“检索命中即等同实体”：摘录讲的是另一家乐园，但被当成了提问对象。</p>
+    <div class="flow">
+      <div class="step"><b>提问</b>「魔都森林」好不好玩</div>
+      <div class="step"><b>检索</b>命中含“森林 / 亲子乐园”的摘录</div>
+      <div class="step bad"><b>误判</b>把摘录属性当作魔都森林</div>
+      <div class="step bad"><b>结论</b>用错误对象给出“好玩/不好玩”</div>
+    </div>
+    <p class="callout">
+      正确做法：先核对“摘录的主体是不是提问对象”。主体不一致时，摘录只能作为背景参考，不能作为结论依据。
+    </p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">2</span>两个实体，逐项对照</h2>
+    <p class="sub">绿色列为「魔都森林」（仅列可确认信息），黄色列为摘录中的 The Big Things Playground。</p>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:20%">维度</th>
+          <th style="width:40%">魔都森林</th>
+          <th style="width:40%">The Big Things Playground</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>城市</td>
+          <td class="col-a">上海（“魔都”即上海）</td>
+          <td class="col-b">香港（据公开资料）</td>
+        </tr>
+        <tr>
+          <td>业态</td>
+          <td class="col-a">大众点评上的游玩项目</td>
+          <td class="col-b">室内丛林主题亲子乐园</td>
+        </tr>
+        <tr>
+          <td>规模</td>
+          <td class="col-a"><span class="pill mid">未核实</span></td>
+          <td class="col-b">占地 4000 呎（约 372 ㎡）</td>
+        </tr>
+        <tr>
+          <td>内容</td>
+          <td class="col-a"><span class="pill mid">未核实</span></td>
+          <td class="col-b">18 个游戏区域，大自然主题</td>
+        </tr>
+        <tr>
+          <td>设计/材料</td>
+          <td class="col-a"><span class="pill mid">未核实</span></td>
+          <td class="col-b">芬兰游乐场设计师设计，设施为芬兰松木</td>
+        </tr>
+        <tr>
+          <td>与对方的关系</td>
+          <td class="col-a"><span class="pill no">无关联</span></td>
+          <td class="col-b"><span class="pill no">无关联</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="legend">判断依据：名称含义、城市、业态三项均不同；“无关联”为高置信结论。带“未核实”的格子表示公开检索没有取得可靠商户页，不臆测。</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">3</span>重新判断：魔都森林好不好玩</h2>
+    <p class="sub">
+      先划清证据边界：本次没有拿到该商户的点评页（评分、票价、最新评价），因此
+      <b>不给出平台评分</b>；下面按“上海本地、点评类游玩项目”的定位做匹配度判断。
+    </p>
+
+    <h3 style="font-size:14px;margin:18px 0 2px">3.1 期待匹配度（主观评估，非平台评分）</h3>
+    <div class="chart">
+      <div class="bar-row"><span>城市里轻松逛逛 / 拍照</span><div class="track"><div class="fill" style="width:82%"></div></div><span>82</span></div>
+      <div class="bar-row"><span>带娃放电（半日）</span><div class="track"><div class="fill" style="width:74%"></div></div><span>74</span></div>
+      <div class="bar-row"><span>朋友 / 情侣约会</span><div class="track"><div class="fill flat" style="width:65%"></div></div><span>65</span></div>
+      <div class="bar-row"><span>专程跨城打卡</span><div class="track"><div class="fill low" style="width:28%"></div></div><span>28</span></div>
+      <div class="bar-row"><span>想要大型室内丛林乐园</span><div class="track"><div class="fill low" style="width:12%"></div></div><span>12</span></div>
+    </div>
+    <p class="legend">条形越长表示“你的期待”与“该定位下的体验”越匹配。最后一行为“拿它当 The Big Things 平替”的匹配度，明显不成立。</p>
+
+    <h3 style="font-size:14px;margin:22px 0 2px">3.2 谁适合去</h3>
+    <div class="matrix">
+      <div class="mrow"><span>上海本地、想找个地方走走</span><span class="pill ok">推荐</span></div>
+      <div class="mrow"><span>带学龄前孩子，半天行程</span><span class="pill ok">推荐</span></div>
+      <div class="mrow"><span>只想拍照打卡、不追求项目密度</span><span class="pill mid">可去</span></div>
+      <div class="mrow"><span>专程从外地/跨城为它而来</span><span class="pill no">不建议</span></div>
+      <div class="mrow"><span>想要“4000 呎 / 18 区 / 芬兰设计”的室内乐园</span><span class="pill no">去错地方</span></div>
+    </div>
+
+    <div class="callout">
+      <b>结论：</b>按“上海本地游玩项目”的定位，魔都森林值得顺路去、适合半日；
+      但它不是 The Big Things，别按“大型室内丛林乐园”的标准买预期。
+      若你真正想要的是后者，应直接找那家（香港）室内丛林乐园，而不是魔都森林。
+    </div>
+    <p class="legend">注：若该商户实际为大型主题乐园（非小型游玩项目），上表前两行仍成立，第三、四行需上调；以点评页的面积、项目数、游玩时长为准。</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">4</span>去之前，2 分钟核对这 4 项</h2>
+    <div class="two">
+      <div class="mini">
+        <h4>① 业态标签</h4>
+        是“儿童乐园 / 室内游乐”，还是“公园 / 展馆 / 户外营地”？标签决定预期。
+      </div>
+      <div class="mini">
+        <h4>② 评分分布</h4>
+        看 4 星以下的比例和最新 20 条，不看总分；重点搜“排队、卫生、设备老旧”。
+      </div>
+      <div class="mini">
+        <h4>③ 票价与时长</h4>
+        单价 + 建议游玩时长，算出“每小时成本”，再和同类比。
+      </div>
+      <div class="mini">
+        <h4>④ 交通与预约</h4>
+        地铁步行距离、是否需预约、周末是否限流。
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">5</span>证据与置信度</h2>
+    <div class="meter"><span>“魔都”= 上海</span><div class="track"><div class="fill" style="width:96%"></div></div><span>高</span></div>
+    <div class="meter"><span>两者无关联</span><div class="track"><div class="fill" style="width:92%"></div></div><span>高</span></div>
+    <div class="meter"><span>The Big Things 属性</span><div class="track"><div class="fill" style="width:80%"></div></div><span>较高</span></div>
+    <div class="meter"><span>魔都森林业态/定位</span><div class="track"><div class="fill low" style="width:55%"></div></div><span>中</span></div>
+    <div class="meter"><span>魔都森林评分/票价</span><div class="track"><div class="fill low" style="width:12%"></div></div><span>缺失</span></div>
+    <p class="legend">
+      “较高/中/缺失”指本次可获得的证据强度：The Big Things 属性来自你提供的摘录；魔都森林的评分与票价未从公开检索取得，
+      故本页不给数字评分，只给匹配度与决策建议。
+    </p>
+  </section>
+
+  <footer>
+    生成于 2026-10-18 · 本页为内容更正与决策辅助，不构成平台评分或商业推荐 · 事实层与判断层已分开标注
+  </footer>
+</div>
+</body>
+</html>

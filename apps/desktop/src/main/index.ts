@@ -1,9 +1,31 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import log from 'electron-log/main'
 import { sidecarBaseUrl, sidecarFetch, sidecarToken, startSidecar, stopSidecar, streamSidecar } from './sidecar'
 
+// Single-machine deployment: keep the Chromium profile, logs and crash dumps
+// inside the repository instead of %APPDATA% when CHATCHAT_DATA_DIR is set.
+const localDataDir = process.env.CHATCHAT_DATA_DIR
+if (localDataDir) {
+  for (const dir of [localDataDir, path.join(localDataDir, 'logs'), path.join(localDataDir, 'crash')]) {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  }
+  app.setPath('userData', localDataDir)
+  app.setPath('sessionData', localDataDir)
+  app.setPath('logs', path.join(localDataDir, 'logs'))
+  app.setPath('crashDumps', path.join(localDataDir, 'crash'))
+}
+
 log.initialize()
+
+// Remote desktop / VM sessions have no usable GPU; software rendering keeps the window alive.
+if (process.env.CHATCHAT_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+  app.commandLine.appendSwitch('in-process-gpu')
+}
 
 let sidecarError: string | null = null
 
@@ -22,6 +44,17 @@ function createWindow(): void {
     },
   })
   win.on('ready-to-show', () => win.show())
+  // Verification hook: CHATCHAT_SHOT=<png path> captures the rendered window.
+  if (process.env.CHATCHAT_SHOT) {
+    win.webContents.once('did-finish-load', () => {
+      setTimeout(() => {
+        void win
+          .capturePage()
+          .then((image) => writeFileSync(process.env.CHATCHAT_SHOT as string, image.toPNG()))
+          .catch((error) => log.error('[shot] capture failed', error))
+      }, 8000)
+    })
+  }
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {

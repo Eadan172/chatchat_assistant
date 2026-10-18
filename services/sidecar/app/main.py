@@ -13,7 +13,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import app.decision.deepseek  # noqa: F401  registers the DeepSeek decision backend
-from app.api import ask, chat, clarify, collect, connectors, decision, indexing, library, search, settings, stats, verify
+from app.api import (
+    ask,
+    chat,
+    clarify,
+    collect,
+    connectors,
+    conversations,
+    decision,
+    imports,
+    indexing,
+    library,
+    preferences,
+    search,
+    settings,
+    stats,
+    verify,
+)
 from app.db.session import SIDECAR_ROOT, close_db, init_db
 from app.llm.registry import ProviderRegistry
 
@@ -48,7 +64,7 @@ async def auth(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"http://(127\.0\.0\.1|localhost)(:\d+)?",
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -64,6 +80,9 @@ app.include_router(clarify.router, prefix="/clarify", tags=["clarify"])
 app.include_router(verify.router, prefix="/verify", tags=["verify"])
 app.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
 app.include_router(decision.router, prefix="/decision", tags=["decision"])
+app.include_router(imports.router, tags=["import"])
+app.include_router(conversations.router, tags=["memory"])
+app.include_router(preferences.router, tags=["preferences"])
 
 
 @app.get("/health")

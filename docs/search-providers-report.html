@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>联网检索改造说明：SearXNG + Tavily</title>
+<style>
+  :root {
+    --mist:#e7f2ec; --sage:#5f8f78; --pool:#d7e6f2; --ink:#243038;
+    --muted:#5b6b73; --line:#cfded6; --good:#166534; --good-bg:#dcfce7;
+    --warn:#b45309; --warn-bg:#fef3c7; --bad:#b91c1c; --bad-bg:#fee2e2;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--mist); color:var(--ink); line-height:1.65;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:40px 24px 64px; }
+  header.hero { background:#fff; border:1px solid var(--line); border-radius:22px;
+    padding:28px 30px; box-shadow:0 10px 30px rgba(36,48,56,.06); }
+  .eyebrow { color:var(--sage); font-size:13px; letter-spacing:.08em; text-transform:uppercase; margin:0 0 8px; }
+  h1 { font-size:30px; line-height:1.3; margin:0 0 10px; }
+  .lede { margin:0; color:var(--muted); font-size:15px; max-width:72ch; }
+  .status { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:20px; }
+  .card { border:1px solid var(--line); border-radius:14px; padding:14px 16px; background:#f9fcfa; }
+  .card .k { font-size:12px; color:var(--muted); letter-spacing:.04em; }
+  .card .v { font-size:17px; font-weight:600; margin-top:2px; }
+  .card .n { font-size:12px; color:var(--muted); margin-top:4px; }
+  .card.good { border-color:#bbf7d0; background:#f4fdf7; }
+  .card.warn { border-color:#fde68a; background:#fffdf3; }
+  section { background:#fff; border:1px solid var(--line); border-radius:20px;
+    padding:24px 26px; margin-top:18px; }
+  h2 { font-size:19px; margin:0 0 6px; }
+  h2 .num { display:inline-grid; place-items:center; width:26px; height:26px; margin-right:8px;
+    border-radius:8px; background:var(--pool); font-size:13px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 18px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+  .badge.good { background:var(--good-bg); color:var(--good); }
+  .badge.warn { background:var(--warn-bg); color:var(--warn); }
+  .badge.bad { background:var(--bad-bg); color:var(--bad); }
+  .badge.neutral { background:#eef4f0; color:var(--muted); }
+
+  /* provider chain */
+  .chain { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:6px 0 2px; }
+  .node { border:1px solid var(--line); background:#f8fbf9; border-radius:12px;
+    padding:10px 12px; min-width:104px; font-size:13px; }
+  .node b { display:block; font-size:13px; }
+  .node small { color:var(--muted); font-size:11px; }
+  .node.free { border-color:#bbf7d0; background:#f4fdf7; }
+  .node.paid { border-color:#fde68a; background:#fffdf3; }
+  .arrow { color:var(--sage); font-size:14px; }
+  .chain-note { font-size:12px; color:var(--muted); margin-top:10px; }
+  .group-label { font-size:12px; color:var(--muted); margin:14px 0 4px; letter-spacing:.04em; }
+
+  table { width:100%; border-collapse:collapse; font-size:13.5px; table-layout:fixed; }
+  th,td { text-align:left; padding:10px; border-bottom:1px solid #e6eeea; vertical-align:top; overflow-wrap:anywhere; }
+  th { font-size:12px; color:var(--muted); font-weight:600; }
+  tr:last-child td { border-bottom:none; }
+  tbody tr:nth-child(even) td { background:#fafcfb; }
+
+  .steps { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-top:6px; }
+  .step { position:relative; border:1px solid var(--line); border-radius:12px; padding:12px; font-size:12.5px; background:#f9fcfa; }
+  .step b { display:block; color:var(--sage); font-size:11.5px; letter-spacing:.04em; margin-bottom:4px; }
+  .step:not(:last-child)::after { content:"→"; position:absolute; right:-8px; top:50%; transform:translateY(-50%);
+    color:var(--sage); background:#fff; padding:0 2px; font-size:13px; }
+  .step.hot { border-color:#bbf7d0; background:#f4fdf7; }
+
+  .bars { display:grid; gap:12px; margin-top:4px; }
+  .bar-row { display:grid; grid-template-columns:180px 1fr 64px; gap:12px; align-items:center; font-size:13px; }
+  .track { height:16px; border-radius:999px; background:#eef4f0; overflow:hidden; display:flex; }
+  .fill { height:100%; background:linear-gradient(90deg,#7fb39b,var(--sage)); }
+  .fill.muted { background:#cbd5cf; }
+  .legend { font-size:12px; color:var(--muted); margin-top:8px; }
+
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }
+  .stat { border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:#f9fcfa; }
+  .stat .v { font-size:22px; font-weight:700; line-height:1.2; }
+  .stat .k { font-size:12px; color:var(--muted); }
+
+  ul.tight { margin:6px 0 0; padding-left:20px; }
+  ul.tight li { margin:5px 0; }
+  code { background:#f1f6f3; border:1px solid #e0eae4; border-radius:6px; padding:1px 6px; font-size:12.5px; }
+  .callout { border-left:4px solid var(--warn); background:var(--warn-bg); padding:12px 14px;
+    border-radius:0 10px 10px 0; font-size:13.5px; margin:12px 0 0; }
+  footer { color:var(--muted); font-size:12px; margin-top:20px; padding:0 4px; }
+  @media (max-width:760px) {
+    .status,.stats { grid-template-columns:1fr 1fr; }
+    .steps { grid-template-columns:1fr 1fr; }
+    .step:not(:last-child)::after { display:none; }
+    .bar-row { grid-template-columns:120px 1fr 52px; }
+    h1 { font-size:24px; }
+  }
+  @media print { body { background:#fff; } section, header.hero { break-inside:avoid; box-shadow:none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <p class="eyebrow">联网检索改造 · 接入说明</p>
+    <h1>SearXNG 与 Tavily 均已接入</h1>
+    <p class="lede">
+      本轮把免密钥检索从“网页解析”升级为“自建 SearXNG 优先”，并把 Tavily Key 接入本地密钥存储，完成真实检索验证。
+      检索结果统一成同一结构（标题 / 链接 / 摘要 / 来源 / 分数），上层问答无需感知通道差异。
+    </p>
+    <div class="status">
+      <div class="card good">
+        <div class="k">SearXNG</div>
+        <div class="v">已上线</div>
+        <div class="n">Docker · 127.0.0.1:8080 · JSON 27 条</div>
+      </div>
+      <div class="card good">
+        <div class="k">兜底通道</div>
+        <div class="v">360 / Bing</div>
+        <div class="n">免密钥，SearXNG 故障时自动接替</div>
+      </div>
+      <div class="card good">
+        <div class="k">Tavily</div>
+        <div class="v">已配置</div>
+        <div class="n">真实调用 HTTP 200 · 3 条结果</div>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="num">1</span>一张图看懂检索链</h2>
+    <p class="sub">按顺序尝试，任一通道返回有效结果即停止；全部失败才降级为“本地知识库回答”。</p>
+
+    <div class="group-label">免密钥组（优先，不消耗额度）</div>
+    <div class="chain">
+      <div class="node free"><b>SearXNG</b><small>自建 · JSON</small></div>
+      <span class="arrow">→</span>
+      <div class="node free"><b>360 搜索</b><small>页面解析</small></div>
+      <span class="arrow">→</span>
+      <div class="node free"><b>Bing 网页</b><small>页面解析</small></div>
+    </div>
+
+    <div class="group-label">付费组（仅在前三者失败时启用）</div>
+    <div class="chain">
+      <div class="node paid"><b>Serper</b><small>1 credit / 次</small></div>
+      <span class="arrow">→</span>
+      <div class="node paid"><b>SerpApi</b><small>按量计费</small></div>
+      <span class="arrow">→</span>
+      <div class="node paid"><b>Tavily</b><small>需 Key</small></div>
+    </div>
+    <p class="chain-note">
+      当前配置 <code>WEB_SEARCH_KEYLESS_FIRST=1</code>，因此免密钥组整体排在付费组之前。
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span>通道对比</h2>
+    <p class="sub">“链接形态”决定用户点击后的落点；“相关性地板”用于拦截反爬诱饵页。</p>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:16%">通道</th>
+          <th style="width:14%">需要 Key</th>
+          <th style="width:24%">结果链接</th>
+          <th style="width:24%">稳定性</th>
+          <th style="width:22%">当前状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>SearXNG</td>
+          <td><span class="badge good">否</span></td>
+          <td>原文直链</td>
+          <td>高（自建，可换引擎）</td>
+          <td><span class="badge good">已上线</span></td>
+        </tr>
+        <tr>
+          <td>360 搜索</td>
+          <td><span class="badge good">否</span></td>
+          <td><code>so.com/link</code> 跳转</td>
+          <td>中（改版/限流会失效）</td>
+          <td><span class="badge good">可用</span></td>
+        </tr>
+        <tr>
+          <td>Bing 网页</td>
+          <td><span class="badge good">否</span></td>
+          <td>原文直链</td>
+          <td>低（部分中文查询返回诱饵）</td>
+          <td><span class="badge warn">有闸门保护</span></td>
+        </tr>
+        <tr>
+          <td>Serper</td>
+          <td><span class="badge warn">是</span></td>
+          <td>原文直链</td>
+          <td>高（额度耗尽返回 400）</td>
+          <td><span class="badge warn">上次检测剩 1</span></td>
+        </tr>
+        <tr>
+          <td>SerpApi</td>
+          <td><span class="badge warn">是</span></td>
+          <td>原文直链</td>
+          <td>高</td>
+          <td><span class="badge neutral">未配置</span></td>
+        </tr>
+        <tr>
+          <td>Tavily</td>
+          <td><span class="badge warn">是</span></td>
+          <td>原文直链</td>
+          <td>高</td>
+          <td><span class="badge good">已接入</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span>一次提问发生了什么</h2>
+    <p class="sub">Provider 只负责“检索 + 归一化”，引用合成仍由原问答管线完成。</p>
+    <div class="steps">
+      <div class="step"><b>① 解析</b>问题改写，确定本地 / 网页通道</div>
+      <div class="step"><b>② 选路</b>按顺序取第一个可用 Provider</div>
+      <div class="step hot"><b>③ 检索</b>SearXNG JSON 或页面解析</div>
+      <div class="step"><b>④ 过滤</b>相关性闸门丢弃诱饵结果</div>
+      <div class="step"><b>⑤ 合成</b>统一 hit → 带 [n] 引用的回答</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span>验收结果</h2>
+    <div class="stats">
+      <div class="stat"><div class="v">27</div><div class="k">SearXNG JSON 返回条数</div></div>
+      <div class="stat"><div class="v">5</div><div class="k">链路实际采用条数（limit=5）</div></div>
+      <div class="stat"><div class="v">4</div><div class="k">新增 Provider 单测</div></div>
+      <div class="stat"><div class="v">103<span style="font-size:13px;color:var(--muted)">/105</span></div><div class="k">后端测试通过</div></div>
+    </div>
+
+    <div class="bars">
+      <div class="bar-row">
+        <span>后端测试通过率</span>
+        <div class="track"><div class="fill" style="width:98.1%"></div><div class="fill muted" style="width:1.9%"></div></div>
+        <span>98.1%</span>
+      </div>
+      <div class="bar-row">
+        <span>SearXNG 链路命中</span>
+        <div class="track"><div class="fill" style="width:100%"></div></div>
+        <span>5/5</span>
+      </div>
+    </div>
+    <p class="legend">
+      灰色 1.9% 为 2 个既有的 Windows 平台断言失败（路径分隔符、POSIX 0600 权限），与本次改动无关。
+    </p>
+
+    <table style="margin-top:16px">
+      <thead>
+        <tr><th style="width:32%">验收项</th><th style="width:44%">方法</th><th>结果</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>SearXNG 初始化与检索</td><td><code>/search?format=json</code></td><td><span class="badge good">HTTP 200 · 27 条</span></td></tr>
+        <tr><td>链路选择</td><td><code>search_web("Dify 是什么")</code></td><td><span class="badge good">provider=searxng · 5 条</span></td></tr>
+        <tr><td>问答端到端</td><td><code>/ask「Dify 是什么」</code></td><td><span class="badge good">本地[1] + 直链[2..]</span></td></tr>
+        <tr><td>Tavily 请求/解析</td><td>本地 mock + 环境变量</td><td><span class="badge good">统一 hit 结构</span></td></tr>
+        <tr><td>Tavily 真实调用</td><td><code>/search</code>（api_key 方式）</td><td><span class="badge good">HTTP 200 · 3 条</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="num">5</span>配置清单</h2>
+    <table>
+      <thead>
+        <tr><th style="width:34%">配置项</th><th style="width:28%">当前值</th><th>作用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>SEARXNG_BASE_URL</code></td><td><code>http://127.0.0.1:8080</code></td><td>SearXNG 端点</td></tr>
+        <tr><td><code>WEB_SEARCH_KEYLESS</code></td><td><code>1</code></td><td>启用免密钥通道（测试环境默认关闭）</td></tr>
+        <tr><td><code>WEB_SEARCH_KEYLESS_FIRST</code></td><td><code>1</code></td><td>免密钥通道排在付费通道之前</td></tr>
+        <tr><td><code>TAVILY_API_KEY</code></td><td><span class="badge warn">空</span></td><td>Tavily Key；环境变量优先于 secrets 文件</td></tr>
+        <tr><td><code>WEB_SEARCH_MAX_QUERIES</code></td><td><code>3</code></td><td>每次提问最多搜索次数</td></tr>
+        <tr><td><code>WEB_SEARCH_RESULTS</code></td><td><code>10</code></td><td>单次返回条数上限</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="num">6</span>密钥与文件</h2>
+    <div class="callout" style="border-left-color:var(--sage);background:#f4fdf7">
+      <b>密钥已接入：</b>保存在 <code>.data/secrets/ask.json</code>（仅本机），环境变量
+      <code>TAVILY_API_KEY</code> 仍优先。更换 Key 后运行
+      <code>python scripts\win\10-check-search-providers.py --live</code> 即可复验。
+    </div>
+    <ul class="tight">
+      <li><code>services/sidecar/app/web_search/live.py</code> — 新增 SearXNG Provider、HTML 回退、相关性闸门修正</li>
+      <li><code>services/sidecar/tests/test_m9_providers.py</code> — 4 条单测（JSON / HTML / Tavily）</li>
+      <li><code>scripts/win/10-check-search-providers.py</code> — 通道诊断脚本（<code>--live</code> 才发真实请求）</li>
+      <li><code>.env</code>、<code>docs/DEPLOY-LOCAL.md</code> — 端点与配置说明</li>
+      <li><code>.data/searxng/settings.yml</code> — 容器配置（启用 JSON、关闭 limiter）</li>
+    </ul>
+  </section>
+
+  <footer>生成于 2026-10-18 · 数据来自本机实测（SearXNG 容器、后端测试、问答链路）</footer>
+</div>
+</body>
+</html>

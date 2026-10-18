@@ -62,6 +62,32 @@ class Chunk(SQLModel, table=True):
     meta: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
+class Project(SQLModel, table=True):
+    """A user-defined project that conversations and folders can belong to."""
+
+    __tablename__ = "project"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    description: str | None = None
+    color: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime | None = None
+
+
+class ConversationFolder(SQLModel, table=True):
+    """A folder inside the conversation list; optionally scoped to a project."""
+
+    __tablename__ = "conversation_folder"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    project_id: int | None = Field(default=None, foreign_key="project.id", index=True)
+    sort_order: int = 0
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime | None = None
+
+
 class Conversation(SQLModel, table=True):
     __tablename__ = "conversation"
 
@@ -71,6 +97,17 @@ class Conversation(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
     clarify_session_id: int | None = Field(default=None, index=True)
     source_policy: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+    # M7 memory management.
+    folder_id: int | None = Field(default=None, foreign_key="conversation_folder.id", index=True)
+    project_id: int | None = Field(default=None, foreign_key="project.id", index=True)
+    forked_from_id: int | None = Field(default=None, index=True)
+    forked_from_message_id: int | None = None
+    locale: str | None = None
+    style: str | None = None
+    updated_at: datetime | None = Field(default=None, index=True)
+    archived: bool = False
+    pinned: bool = False
 
 
 class Message(SQLModel, table=True):

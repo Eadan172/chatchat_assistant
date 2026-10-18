@@ -262,6 +262,9 @@ def synthesize(
     registry=None,
     complete: Complete | None = None,
     missing_key: bool = False,
+    locale: str = "zh",
+    style_directive: str | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> Synthesis:
     ima_hits, related = prepare_ima(query, list(groups.get("ima") or []))
     prepared = dict(groups)
@@ -297,7 +300,9 @@ def synthesize(
     if missing_key or complete is None:
         return finish(grouped_text(query, evidences, conflicts, reason=GROUPED_NO_KEY), "offline", "grouped", 0, 0)
     try:
-        raw, prompt_tokens, completion_tokens = complete(_messages(query, evidences, bool(conflicts)))
+        raw, prompt_tokens, completion_tokens = complete(
+            _messages(query, evidences, bool(conflicts), locale, style_directive, history)
+        )
     except Exception:
         return finish(grouped_text(query, evidences, conflicts, reason=GROUPED_FAILED), "offline", "grouped", 0, 0)
     text = _finalize(raw, evidences, conflicts)
@@ -311,6 +316,9 @@ def synthesize(
             evidences,
             citations,
             complete,
+            locale,
+            style_directive,
+            history,
         )
         text = _post_clean(query, text, evidences)
     text = ensure_score_notice(query, text, evidences)
@@ -469,8 +477,29 @@ def citation_excerpt_limit() -> int:
     return min(max(value, 800), 8000)
 
 
+def _cjk_ratio(text: str) -> float:
+    body = [char for char in (text or "") if not char.isspace()]
+    if not body:
+        return 0.0
+    return sum(1 for char in body if "\u4e00" <= char <= "\u9fff") / float(len(body))
+
+
+def _translated_claim(claim: str, source: str) -> bool:
+    """English answer over Chinese evidence: token overlap cannot be checked.
+
+    The model still has to cite an existing number; the caller only keeps a [n]
+    that exists in the citation list, so a translated sentence stays traceable.
+    """
+    body = _CITE.sub(" ", claim or "").strip()
+    if len(body) < 12:
+        return False
+    return _cjk_ratio(body) < 0.2 and _cjk_ratio(source or "") > 0.3
+
+
 def citation_supports(claim: str, source: str) -> bool:
     """True when this sentence's facts, not just its topic, are in the excerpt."""
+    if _translated_claim(claim, source):
+        return True
     body = _CITE.sub(" ", claim or "")
     claimed_ranks = _rank_numbers(body)
     if claimed_ranks and not claimed_ranks <= _rank_numbers(source or ""):
@@ -766,13 +795,31 @@ def polish_staleness(text: str, items: list[Evidence]) -> str:
     return "\n".join(kept_rows).strip()
 
 
-def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[str, str]]:
-    system = (
-        "你是问答助手。只根据给出的编号和摘录用中文回答。"
-        "每条要点用 [n] 引用，只能使用下面出现过的编号，不要编造编号或摘录之外的事实。"
-        "每一条要点的 [n] 只能标在直接写出该句事实的摘录上，不能标在仅仅话题相关的来源上。"
-        "没有摘录支撑的句子不要写。"
-    )
+def _messages(
+    query: str,
+    items: list[Evidence],
+    conflict: bool,
+    locale: str = "zh",
+    style_directive: str | None = None,
+    history: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    if (locale or "zh").lower().startswith("en"):
+        system = (
+            "You are a Q&A assistant. Answer in English using only the numbered excerpts below. "
+            "Cite every key point with [n] and never invent a number or a fact outside the excerpts. "
+            "Attach [n] only to the excerpt that states that fact directly, not to a merely related source. "
+            "Do not write sentences that no excerpt supports. "
+            "Every sentence of the final answer must be written in English, even when the excerpts are in Chinese."
+        )
+    else:
+        system = (
+            "你是问答助手。只根据给出的编号和摘录用中文回答。"
+            "每条要点用 [n] 引用，只能使用下面出现过的编号，不要编造编号或摘录之外的事实。"
+            "每一条要点的 [n] 只能标在直接写出该句事实的摘录上，不能标在仅仅话题相关的来源上。"
+            "没有摘录支撑的句子不要写。"
+        )
+    if style_directive:
+        system += f" {style_directive}"
     if ranking_requested(query) or any(_is_list_article(item, query) for item in items):
         system += (
             "用户要的是排名、榜单或 top。"
@@ -809,8 +856,30 @@ def _messages(query: str, items: list[Evidence], conflict: bool) -> list[dict[st
             "并列双方摘录，不要选择其中一方，不要写应以哪边为准。"
         )
     blocks = [f"[{item.n}] {_excerpt(item.text, prompt_excerpt_limit())}" for item in items]
+    history_text = _history_block(history, locale)
     user = "【摘录】\n" + "\n\n".join(blocks) + f"\n\n【问题】{query}"
+    if history_text:
+        user = f"{history_text}\n\n{user}"
+    if (locale or "zh").lower().startswith("en"):
+        user += "\n\n[Language] Write the whole answer in English."
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _history_block(history: list[dict[str, Any]] | None, locale: str = "zh") -> str:
+    if not history:
+        return ""
+    english = (locale or "zh").lower().startswith("en")
+    lines = ["【Conversation so far】" if english else "【对话历史】"]
+    for row in history[-6:]:
+        text = str(row.get("content") or "").strip().replace("\n", " ")
+        if not text:
+            continue
+        if english:
+            label = "User" if row.get("role") == "user" else "Assistant"
+        else:
+            label = "用户" if row.get("role") == "user" else "助手"
+        lines.append(f"{label}: {text[:300]}")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _finalize(raw: str, items: list[Evidence], conflicts: list[tuple[Evidence, Evidence]]) -> str:
@@ -974,13 +1043,18 @@ def _regenerate_thin(
     items: list[Evidence],
     citations: list[dict[str, Any]],
     complete: Complete,
+    locale: str = "zh",
+    style_directive: str | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> tuple[str, int, int]:
     if not items or not _needs_regen(text):
         return text, 0, 0
     cited = {int(match) for match in _CITE.findall(text or "")}
     chosen = [item for item in items if item.n in cited] or list(items)
     try:
-        raw, prompt_tokens, completion_tokens = complete(_regen_messages(query, chosen))
+        raw, prompt_tokens, completion_tokens = complete(
+            _regen_messages(query, chosen, locale, style_directive, history)
+        )
     except Exception:
         return text, 0, 0
     rewritten = drop_unsupported_citations(_finalize(raw, chosen, False), citations)
@@ -989,9 +1063,18 @@ def _regenerate_thin(
     return text, prompt_tokens, completion_tokens
 
 
-def _regen_messages(query: str, items: list[Evidence]) -> list[dict[str, str]]:
-    messages = _messages(query, items, False)
-    messages[0]["content"] += "上一段删掉没有出处的句子后只剩一两句。请只根据这些摘录重写成连贯的短段，每句都要有对得上的 [n]。不要编造名次。"
+def _regen_messages(
+    query: str,
+    items: list[Evidence],
+    locale: str = "zh",
+    style_directive: str | None = None,
+    history: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    messages = _messages(query, items, False, locale, style_directive, history)
+    messages[0]["content"] += (
+        "上一段删掉没有出处的句子后只剩一两句。请只根据这些摘录重写成连贯的短段，"
+        "每句都要有对得上的 [n]。不要编造名次。"
+    )
     return messages
 
 

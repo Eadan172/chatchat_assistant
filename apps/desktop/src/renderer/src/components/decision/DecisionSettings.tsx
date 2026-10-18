@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useI18n } from '../../i18n'
 import { errorMessage, sidecarRequest } from '../clarify/client'
 import {
   parseDecisionEvents,
@@ -9,8 +10,9 @@ import {
 } from './view'
 
 export function DecisionSettings() {
+  const { t, tf } = useI18n()
   const [settings, setSettings] = useState<DecisionSettingsView | null>(null)
-  const [message, setMessage] = useState('去网上搜索最新的说法')
+  const [message, setMessage] = useState(t('去网上搜索最新的说法'))
   const [events, setEvents] = useState<DecisionRowView[]>([])
   const [logs, setLogs] = useState<DecisionRowView[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -20,7 +22,7 @@ export function DecisionSettings() {
   async function loadLogs() {
     const result = await sidecarRequest('GET', '/decision/logs?limit=20&offset=0')
     if (!result.ok) {
-      setError(result.error || errorMessage(result.data, '没能读到影子日志'))
+      setError(result.error || errorMessage(result.data, t('没能读到影子日志')))
       return
     }
     setLogs(parseDecisionLogs(result.data))
@@ -32,14 +34,14 @@ export function DecisionSettings() {
       const result = await sidecarRequest('GET', '/settings/decision')
       if (cancelled) return
       if (!result.ok) {
-        setError(result.error || errorMessage(result.data, '没能读到决策层设置'))
+        setError(result.error || errorMessage(result.data, t('没能读到决策层设置')))
         return
       }
       setSettings(parseDecisionSettings(result.data))
       const listed = await sidecarRequest('GET', '/decision/logs?limit=20&offset=0')
       if (cancelled) return
       if (!listed.ok) {
-        setError(listed.error || errorMessage(listed.data, '没能读到影子日志'))
+        setError(listed.error || errorMessage(listed.data, t('没能读到影子日志')))
         return
       }
       setLogs(parseDecisionLogs(listed.data))
@@ -67,7 +69,7 @@ export function DecisionSettings() {
     setPending(false)
     if (!result.ok) {
       setSettings(previous)
-      setError(result.error || errorMessage(result.data, '没能保存决策层设置'))
+      setError(result.error || errorMessage(result.data, t('没能保存决策层设置')))
       return
     }
     setSettings(parseDecisionSettings(result.data))
@@ -75,19 +77,21 @@ export function DecisionSettings() {
 
   return (
     <section data-feature="jev" className="mt-6 rounded-2xl bg-white/80 p-5 shadow-sm ring-1 ring-pool">
-      <h2 className="text-sm font-medium text-sage">决策层</h2>
+      <h2 className="text-sm font-medium text-sage">{t('决策层')}</h2>
       <p className="mt-2 text-sm text-slate-600">
-        影子模式只记录意图、通道和是否查证。实路由默认关闭，问答正文保持当前路径。
+        {t('影子模式只记录意图、通道和是否查证。实路由默认关闭，问答正文保持当前路径。')}
       </p>
       {settings == null ? (
-        <p className="mt-4 text-sm text-slate-500">{error ?? '正在读取决策层设置'}</p>
+        <p className="mt-4 text-sm text-slate-500">{error ?? t('正在读取决策层设置')}</p>
       ) : (
         <div className="mt-4 space-y-3">
           <label className="flex items-center justify-between gap-4 text-sm">
             <span>
-              <span className="block text-ink">影子模式</span>
+              <span className="block text-ink">{t('影子模式')}</span>
               <span className="block text-xs text-slate-500">
-                当前{settings.shadow ? '开启' : '关闭'}。开启时新日志的 applied 为 false。
+                {tf('当前{state}。开启时新日志的 applied 为 false。', {
+                  state: settings.shadow ? t('开启') : t('关闭'),
+                })}
               </span>
             </span>
             <input
@@ -103,9 +107,11 @@ export function DecisionSettings() {
           </label>
           <label className="flex items-center justify-between gap-4 text-sm">
             <span>
-              <span className="block text-ink">启用实路由</span>
+              <span className="block text-ink">{t('启用实路由')}</span>
               <span className="block text-xs text-slate-500">
-                当前{settings.realRouting ? '开启' : '关闭'}。本里程碑不切换检索或澄清。
+                {tf('当前{state}。本里程碑不切换检索或澄清。', {
+                  state: settings.realRouting ? t('开启') : t('关闭'),
+                })}
               </span>
             </span>
             <input
@@ -136,7 +142,7 @@ export function DecisionSettings() {
                 })
                 setPending(false)
                 if (!result.ok) {
-                  setError(result.error || errorMessage(result.data, '问答请求失败'))
+                  setError(result.error || errorMessage(result.data, t('问答请求失败')))
                   return
                 }
                 setEvents(parseDecisionEvents(result.events))
@@ -145,7 +151,7 @@ export function DecisionSettings() {
             }}
           >
             <label className="block text-sm text-slate-600" htmlFor="jev-message">
-              发一条问答，查看本次 decision 事件
+              {t('发一条问答，查看本次 decision 事件')}
             </label>
             <div className="flex gap-2">
               <input
@@ -161,13 +167,13 @@ export function DecisionSettings() {
                 disabled={pending}
                 className="rounded-full bg-sage px-4 py-2 text-sm text-white disabled:opacity-60"
               >
-                发送
+                {t('发送')}
               </button>
             </div>
           </form>
           {events.length > 0 ? (
             <div data-jev-events>
-              <h3 className="text-xs font-medium text-sage">本次 decision 事件</h3>
+              <h3 className="text-xs font-medium text-sage">{t('本次 decision 事件')}</h3>
               <ul className="mt-2 space-y-1 text-xs text-slate-600">
                 {events.map((row) => (
                   <li key={row.key}>
@@ -181,7 +187,7 @@ export function DecisionSettings() {
       )}
       <div ref={logsAnchor} className="mt-5 border-t border-pool pt-4" data-jev-logs>
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-medium text-sage">影子日志</h3>
+          <h3 className="text-sm font-medium text-sage">{t('影子日志')}</h3>
           <button
             type="button"
             data-jev-refresh-logs
@@ -192,11 +198,11 @@ export function DecisionSettings() {
               void loadLogs().finally(() => setPending(false))
             }}
           >
-            刷新记录
+            {t('刷新记录')}
           </button>
         </div>
         {logs.length === 0 ? (
-          <p className="mt-2 text-xs text-slate-500">还没有记录。发送一条问答后会出现。</p>
+          <p className="mt-2 text-xs text-slate-500">{t('还没有记录。发送一条问答后会出现。')}</p>
         ) : (
           <ul className="mt-2 max-h-52 space-y-1 overflow-auto text-xs text-slate-600">
             {logs.map((row) => (

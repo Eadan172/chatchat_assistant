@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useI18n } from '../../i18n'
 import { errorMessage, sidecarRequest } from '../clarify/client'
 
 const FIELDS = [
@@ -11,6 +12,7 @@ const FIELDS = [
 type FieldName = (typeof FIELDS)[number]['name']
 
 export function AskSettings() {
+  const { t } = useI18n()
   const [configured, setConfigured] = useState<Record<string, boolean>>({})
   const [source, setSource] = useState<Record<string, string | null>>({})
   const [drafts, setDrafts] = useState<Record<FieldName, string>>({
@@ -44,14 +46,14 @@ export function AskSettings() {
     setNotice(null)
     try {
       const result = await sidecarRequest('POST', '/settings/ask', payload)
-      if (!result.ok) throw new Error(result.error || errorMessage(result.data, '密钥保存失败'))
+      if (!result.ok) throw new Error(result.error || errorMessage(result.data, t('密钥保存失败')))
       const body = result.data as { configured?: Record<string, boolean>; credential_source?: Record<string, string | null> }
       setConfigured(body.configured || {})
       setSource(body.credential_source || {})
       setDrafts({ deepseek_api_key: '', serper_api_key: '', serpapi_api_key: '', tavily_api_key: '' })
-      setNotice('密钥已保存在本机，不会写入知识库数据库，也不会出现在日志里。')
+      setNotice(t('密钥已保存在本机，不会写入知识库数据库，也不会出现在日志里。'))
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '密钥保存失败')
+      setError(caught instanceof Error ? caught.message : t('密钥保存失败'))
     } finally {
       setPending(false)
     }
@@ -59,16 +61,16 @@ export function AskSettings() {
 
   return (
     <section data-feature="ask" className="mt-6 rounded-2xl bg-white/80 p-5 shadow-sm ring-1 ring-pool">
-      <h2 className="text-sm font-medium text-sage">问答密钥</h2>
+      <h2 className="text-sm font-medium text-sage">{t('问答密钥')}</h2>
       <p className="mt-2 text-sm text-slate-600">
-        DeepSeek 用来选择来源和写回答。联网搜索按 Serper、SerpApi、Tavily 的顺序兜底。留空表示不修改已保存的值。
+        {t('DeepSeek 用来选择来源和写回答。联网搜索按 Serper、SerpApi、Tavily 的顺序兜底。留空表示不修改已保存的值。')}
       </p>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {FIELDS.map((field) => (
           <label key={field.name} className="block text-sm">
             <span className="text-slate-600">
               {field.label}
-              <span className="ml-2 text-xs text-slate-400">{configured[field.name] ? '已配置' : '未配置'}</span>
+              <span className="ml-2 text-xs text-slate-400">{configured[field.name] ? t('已配置') : t('未配置')}</span>
               {source[field.name] ? <span className="ml-2 text-xs text-slate-400">{source[field.name]}</span> : null}
             </span>
             <input
@@ -92,7 +94,7 @@ export function AskSettings() {
         disabled={pending}
         onClick={() => void save()}
       >
-        保存密钥
+        {t('保存密钥')}
       </button>
     </section>
   )

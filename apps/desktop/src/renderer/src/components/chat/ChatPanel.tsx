@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useI18n } from '../../i18n'
+import { isHttpLink, openLink } from '../../lib/openLink'
 import {
   answerAction,
   askRequestBody,
@@ -25,6 +27,7 @@ interface FreshnessNote {
 type AskQuestionCard = AskQuestion
 
 interface Turn {
+  styleLabel?: string | null
   id: number
   role: 'user' | 'assistant'
   content: string
@@ -77,6 +80,18 @@ export function ChatPanel({
   const [pending, setPending] = useState(false)
   const [active, setActive] = useState<Citation | null>(null)
   const [checkingId, setCheckingId] = useState<number | null>(null)
+  const { t, locale } = useI18n()
+  const [style, setStyle] = useState('auto')
+  const [styleOptions, setStyleOptions] = useState<{ id: string; label: string }[]>([])
+  const [activeConversationId] = useState<number | null>(null)
+
+  useEffect(() => {
+    void sidecarRequest('GET', `/styles?locale=${locale}`).then((result) => {
+      if (result.ok && result.data) {
+        setStyleOptions((result.data as { styles?: { id: string; label: string }[] }).styles || [])
+      }
+    })
+  }, [locale])
 
   function patchTurn(id: number, update: (turn: Turn) => Turn) {
     setTurns((current) => current.map((turn) => (turn.id === id ? update(turn) : turn)))
@@ -126,8 +141,15 @@ export function ChatPanel({
       patchTurn(assistantId, (turn) => ({ ...turn, searching: false, content: turn.content + piece }))
       return
     }
+    if (event.event === 'done') {
+      const style = data.style as { id?: string; label?: string } | undefined
+      if (style && style.id) {
+        patchTurn(assistantId, (turn) => ({ ...turn, styleLabel: style.label || style.id }))
+      }
+      return
+    }
     if (event.event === 'error') {
-      const text = typeof data.text === 'string' ? data.text : '问答没有完成'
+      const text = typeof data.text === 'string' ? data.text : t('问答没有完成')
       setError(text)
       patchTurn(assistantId, (turn) => ({ ...turn, content: turn.content || text, searching: false }))
     }
@@ -137,15 +159,15 @@ export function ChatPanel({
     try {
       if (window.desktop?.streamAsk) {
         const result = await window.desktop.streamAsk(body, (event) => applyAsk(assistantId, event))
-        if (!result.ok) throw new Error(result.error || '问答失败')
+        if (!result.ok) throw new Error(result.error || t('问答失败'))
       } else {
         const result = await sidecarRequest('POST', '/ask', body)
-        if (!result.ok) throw new Error(result.error || errorMessage(result.data, '问答失败'))
+        if (!result.ok) throw new Error(result.error || errorMessage(result.data, t('问答失败')))
         for (const event of result.events || []) applyAsk(assistantId, event)
       }
       patchTurn(assistantId, (turn) => ({ ...turn, pending: false, searching: false }))
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : '问答失败'
+      const message = caught instanceof Error ? caught.message : t('问答失败')
       setError(message)
       patchTurn(assistantId, (turn) => ({
         ...turn,
@@ -184,7 +206,10 @@ export function ChatPanel({
         sessionId: null,
       },
     ])
-    await postAsk(assistantId, askRequestBody(question, kbName))
+    await postAsk(
+      assistantId,
+      askRequestBody(question, kbName, { locale, style, conversationId: activeConversationId }),
+    )
   }
 
   async function continueAsk(turn: Turn, chosen?: string) {
@@ -282,18 +307,21 @@ export function ChatPanel({
         message: question,
         mode: 'personal',
         sources: imaOn ? ['local', 'connector'] : ['local'],
+        locale,
+        style,
+        conversation_id: activeConversationId ?? undefined,
       }
       if (window.desktop?.streamChat) {
         const result = await window.desktop.streamChat(body, apply)
-        if (!result.ok) throw new Error(result.error || '问答失败')
+        if (!result.ok) throw new Error(result.error || t('问答失败'))
       } else {
         const result = await sidecarRequest('POST', '/chat', body)
-        if (!result.ok) throw new Error(result.error || errorMessage(result.data, '问答失败'))
+        if (!result.ok) throw new Error(result.error || errorMessage(result.data, t('问答失败')))
         for (const event of result.events || []) apply(event)
       }
       setTurns((current) => current.map((turn) => (turn.id === assistantId ? { ...turn, pending: false } : turn)))
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : '问答失败'
+      const message = caught instanceof Error ? caught.message : t('问答失败')
       setError(message)
       setTurns((current) =>
         current.map((turn) =>
@@ -322,7 +350,7 @@ export function ChatPanel({
       )
       setActive((current) => (current && current.item_id === itemId ? { ...current, freshness_state: state } : current))
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '查证失败')
+      setError(caught instanceof Error ? caught.message : t('查证失败'))
     } finally {
       setCheckingId(null)
     }
@@ -332,26 +360,45 @@ export function ChatPanel({
 
   return (
     <section className="flex min-h-[32rem] flex-col rounded-2xl bg-white/80 p-5 shadow-sm ring-1 ring-pool">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-sage">问答</h2>
-        <p className="text-xs text-slate-500">
-          {askOn ? '澄清后检索本地库、ima 知识库和联网' : '个人库 · 只引用已导入的文档'}
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-medium text-sage">{t('问答')}</h2>
+        <div className="flex items-center gap-2">
+          <select
+            data-testid="chat-style"
+            value={style}
+            onChange={(event) => setStyle(event.target.value)}
+            className="max-w-[190px] rounded-full bg-mist px-3 py-1 text-xs text-ink ring-1 ring-pool"
+            title={t('文体')}
+          >
+            <option value="auto">{t('自动匹配文体')}</option>
+            {styleOptions.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-500">
+            {askOn ? t('澄清后检索本地库、ima 知识库和联网') : t('个人库 · 只引用已导入的文档')}
+          </p>
+        </div>
       </div>
       <div className="mt-4 flex-1 space-y-4">
         {turns.length === 0 ? (
           <p className="text-sm text-slate-500">
             {askOn
-              ? '写下问题。问题含糊时会先追问，然后再检索并给出带来源编号的回答。'
-              : '先把文档放进左侧知识库，再在这里提问。没有命中时会直接说明库里没有相关内容。'}
+              ? t('写下问题。问题含糊时会先追问，然后再检索并给出带来源编号的回答。')
+              : t('先把文档放进左侧知识库，再在这里提问。没有命中时会直接说明库里没有相关内容。')}
           </p>
         ) : null}
         {turns.map((turn) => (
           <article key={turn.id} className={turn.role === 'user' ? 'text-right' : ''}>
-            <p className="text-xs text-slate-500">{turn.role === 'user' ? '你' : '知识库'}</p>
+            <p className="text-xs text-slate-500">
+              {turn.role === 'user' ? t('你') : t('知识库')}
+              {turn.styleLabel ? (
+                <span className="ml-2 rounded-full bg-pool px-2 py-0.5 text-[11px] text-sage">{turn.styleLabel}</span>
+              ) : null}
+            </p>
             {askOn && turn.role === 'assistant' && turn.sources && turn.sources.length > 0 ? (
               <p className="mt-1 text-xs text-sage" data-testid="ask-searching">
-                {turn.searching ? searchingLabel(turn.sources) : searchedLabel(turn.sources)}
+                {turn.searching ? searchingLabel(turn.sources, locale) : searchedLabel(turn.sources, locale)}
               </p>
             ) : null}
             {askOn && turn.role === 'assistant'
@@ -367,7 +414,7 @@ export function ChatPanel({
                 turn.role === 'assistant' && isNotFound(turn.content) ? 'text-sage' : 'text-ink'
               }`}
             >
-              {turn.content || (turn.pending && !turn.question ? '正在检索…' : '')}
+              {turn.content || (turn.pending && !turn.question ? t('正在检索…') : '')}
             </p>
             {askOn && turn.role === 'assistant' && turn.question ? (
               <div className="mt-3 rounded-xl bg-mist px-4 py-3 text-left" data-testid="ask-clarify">
@@ -389,14 +436,14 @@ export function ChatPanel({
                   </div>
                 ) : null}
                 {turn.question.recommendation ? (
-                  <p className="mt-2 text-xs text-sage">建议：{turn.question.recommendation}</p>
+                  <p className="mt-2 text-xs text-sage">{t('建议')}：{turn.question.recommendation}</p>
                 ) : null}
                 {turn.question.reason ? <p className="mt-1 text-xs text-slate-500">{turn.question.reason}</p> : null}
                 <input
                   data-testid="ask-clarify-input"
                   className="mt-3 w-full rounded-full bg-white px-4 py-2 text-sm outline-none ring-1 ring-pool"
                   value={clarifyDraft}
-                  placeholder={turn.question.options.length > 0 ? '或自己填写' : '留空则采用建议'}
+                  placeholder={turn.question.options.length > 0 ? t('或自己填写') : t('留空则采用建议')}
                   onChange={(event) => setClarifyDraft(event.target.value)}
                 />
                 <button
@@ -406,27 +453,28 @@ export function ChatPanel({
                   disabled={pending || (!clarifyDraft.trim() && !canAcceptRecommendation(turn.question))}
                   onClick={() => void continueAsk(turn)}
                 >
-                  继续
+                  {t('继续')}
                 </button>
               </div>
             ) : null}
             {verifyOn && turn.role === 'assistant' && turn.needsVerify != null ? (
               <p className="mt-1 text-xs text-slate-500" data-testid="needs-verify-log">
                 needs_verify · {turn.needsVerify ? 'true' : 'false'}
-                {turn.freshness.length > 0 ? ' · 已自动查证' : ''}
+                {turn.freshness.length > 0 ? t('· 已自动查证') : ''}
               </p>
             ) : null}
             {verifyOn && turn.freshness.length > 0 ? (
               <p className="mt-1 text-xs text-sage" data-testid="auto-verify">
-                已根据提问自动查证
-                {turn.freshness.map((note) => ` · ${freshnessLabel(note.state)}`).join('')}
+                {t('已根据提问自动查证')}
+                {turn.freshness.map((note) => ` · ${t(freshnessLabel(note.state))}`).join('')}
               </p>
             ) : null}
             {turn.citations.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 {turn.citations.map((citation) => {
-                  const badge = askOn ? askSourceBadge(citation) : sourceBadge(citation)
+                  const badge = askOn ? askSourceBadge(citation, locale) : sourceBadge(citation, locale)
                   return (
+                    <span key={`chip-${citation.chunk_id}-${citation.n}`} className="inline-flex items-center gap-1">
                     <button
                       key={`${citation.chunk_id}-${citation.n}`}
                       type="button"
@@ -444,17 +492,29 @@ export function ChatPanel({
                           {badge}
                         </span>
                       ) : null}
-                      {citationLabel(citation)}
+                      {citationLabel(citation, locale)}
                       {showFreshness ? (
                         <span
                           data-testid="freshness-badge"
                           data-state={citation.freshness_state || 'unknown'}
                           className={`ml-2 rounded-full px-2 py-0.5 ${freshnessClass(citation.freshness_state)}`}
                         >
-                          {freshnessLabel(citation.freshness_state)}
+                          {t(freshnessLabel(citation.freshness_state))}
                         </span>
                       ) : null}
                     </button>
+                    {isHttpLink(citation.url) ? (
+                      <button
+                        type="button"
+                        data-testid="citation-open-link"
+                        title={citation.url}
+                        onClick={() => openLink(citation.url)}
+                        className="rounded-full bg-white px-2 py-1 text-xs text-sage ring-1 ring-pool"
+                      >
+                        ↗
+                      </button>
+                    ) : null}
+                    </span>
                   )
                 })}
               </div>
@@ -464,21 +524,41 @@ export function ChatPanel({
       </div>
       {active ? (
         <div className="mt-4 rounded-xl bg-mist px-4 py-3" data-testid="citation-quote">
-          <p className="text-xs text-sage">{citationLabel(active)}</p>
+          <p className="text-xs text-sage">{citationLabel(active, locale)}</p>
           <p className="mt-2 whitespace-pre-wrap text-sm">{active.text}</p>
+          {isHttpLink(active.url) ? (
+            <button
+              type="button"
+              onClick={() => openLink(active.url)}
+              className="mt-2 block max-w-full truncate text-left text-xs text-sage underline"
+              title={active.url}
+            >
+              {active.url}
+            </button>
+          ) : null}
           {askOn && active.origins && active.origins.length > 0 ? (
             <ul className="mt-3 space-y-2" data-testid="ask-origins">
               {active.origins.map((origin, index) => (
                 <li key={`${origin.external_id || origin.url || origin.title || 'origin'}-${index}`} className="text-xs">
-                  <p className="text-sage">{originLabel(origin)}</p>
+                  <p className="text-sage">{originLabel(origin, locale)}</p>
                   {origin.text ? <p className="mt-1 whitespace-pre-wrap text-ink">{origin.text}</p> : null}
+                  {isHttpLink(origin.url) ? (
+                    <button
+                      type="button"
+                      onClick={() => openLink(origin.url)}
+                      className="mt-1 block max-w-full truncate text-left text-sage underline"
+                      title={origin.url}
+                    >
+                      {origin.url}
+                    </button>
+                  ) : null}
                   {citationHref(origin) ? (
                     <button
                       type="button"
                       className="mt-1 text-sage"
-                      onClick={() => void window.desktop?.openExternal?.(citationHref(origin))}
+                      onClick={() => openLink(citationHref(origin))}
                     >
-                      打开链接
+                      {t('打开链接')}
                     </button>
                   ) : null}
                 </li>
@@ -492,7 +572,7 @@ export function ChatPanel({
                 data-state={checkingId === active.item_id ? 'verifying' : active.freshness_state || 'unknown'}
                 className={`rounded-full px-2 py-0.5 text-xs ${freshnessClass(checkingId === active.item_id ? 'verifying' : active.freshness_state)}`}
               >
-                {freshnessLabel(checkingId === active.item_id ? 'verifying' : active.freshness_state)}
+                {t(freshnessLabel(checkingId === active.item_id ? 'verifying' : active.freshness_state))}
               </span>
               <button
                 type="button"
@@ -501,13 +581,13 @@ export function ChatPanel({
                 disabled={checkingId === active.item_id}
                 onClick={() => void checkCitation(active)}
               >
-                {checkingId === active.item_id ? '查证中…' : '查证'}
+                {checkingId === active.item_id ? t('查证中…') : t('查证')}
               </button>
             </div>
           ) : null}
           {verifyOn && active.freshness_state === 'stale' ? (
             <p data-testid="citation-update-prompt" className="mt-2 rounded-xl bg-amber-100 px-3 py-2 text-xs text-amber-950">
-              这条引用可能已过期。可以在知识库里更新该文件。
+              {t('这条引用可能已过期。可以在知识库里更新该文件。')}
             </p>
           ) : null}
           {active.url ? (
@@ -515,9 +595,9 @@ export function ChatPanel({
               <button
                 type="button"
                 className="mt-2 text-xs text-sage"
-                onClick={() => void window.desktop?.openExternal?.(citationHref(active))}
+                onClick={() => openLink(citationHref(active))}
               >
-                打开链接
+                {t('打开链接')}
               </button>
             ) : (
               <button
@@ -525,7 +605,7 @@ export function ChatPanel({
                 className="mt-2 text-xs text-sage"
                 onClick={() => void window.desktop?.openPath?.(active.url || '')}
               >
-                打开文件
+                {t('打开文件')}
               </button>
             )
           ) : null}
@@ -544,7 +624,7 @@ export function ChatPanel({
             data-testid="ask-kb-name"
             className="w-40 rounded-full bg-mist px-4 py-2 text-sm outline-none ring-1 ring-pool"
             value={kbName}
-            placeholder="知识库名称"
+            placeholder={t('知识库名称')}
             onChange={(event) => setKbName(event.target.value)}
           />
         ) : null}
@@ -552,7 +632,7 @@ export function ChatPanel({
           data-testid="chat-input"
           className="flex-1 rounded-full bg-mist px-4 py-2 text-sm outline-none ring-1 ring-pool"
           value={draft}
-          placeholder={askOn ? '写下要问的问题' : '问一个文档里能回答的问题'}
+          placeholder={askOn ? t('写下要问的问题') : t('问一个文档里能回答的问题')}
           onChange={(event) => setDraft(event.target.value)}
         />
         <button
@@ -561,7 +641,7 @@ export function ChatPanel({
           className="rounded-full bg-sage px-4 py-2 text-sm text-white disabled:opacity-50"
           disabled={pending || !draft.trim()}
         >
-          发送
+          {t('发送')}
         </button>
       </form>
     </section>

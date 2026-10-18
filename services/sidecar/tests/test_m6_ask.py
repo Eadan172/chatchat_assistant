@@ -1207,7 +1207,7 @@ def test_clarified_local_life_routes_web_only(client: TestClient, token: str, mo
     assert plain.sources == ["local", "ima", "web"]
 
 
-def test_jev_web_only_does_not_add_local_or_ima(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_web_choice_still_searches_local_but_never_adds_ima(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     from app.ask.pipeline import decide, life_web_only
 
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -1228,7 +1228,9 @@ def test_jev_web_only_does_not_add_local_or_ima(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setenv("DEEPSEEK_API_KEY", DEEPSEEK_KEY)
     monkeypatch.setattr("app.decision.deepseek._post_chat", fake_post)
     plan = decide("示例概念的定义是什么", brief=None, kb_name="", clarify="skip")
-    assert plan.sources == ["web"]
+    # A web-only decider choice no longer hides the local library: unnamed
+    # questions always search it first (M8), while ima stays opt-in via kb_name.
+    assert plan.sources == ["local", "web"]
     assert plan.backend == "deepseek"
 
 

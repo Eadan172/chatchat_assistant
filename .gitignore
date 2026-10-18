@@ -12,6 +12,10 @@ __pycache__/
 *.db-wal
 *.db-shm
 .data/
+# Local single-machine deployment artifacts (caches, logs).
+.cache/
+.logs/
+.workbuddy/
 # Local env and secrets. The only tracked env file is .env.example.
 .env
 .env.*
@@ -21,9 +25,19 @@ __pycache__/
 !**/.env.example
 secrets/*.json
 **/secrets/*.json
+secrets/
+**/secrets/
 *.pem
 *.key
+*.p12
+*.pfx
 *.log
+# Local backups and throwaway databases
+*.bak
+*.bak-*
+backup/
+*.sqlite
+*.sqlite3
 .DS_Store
 playwright-report/
 test-results/

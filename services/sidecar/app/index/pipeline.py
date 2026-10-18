@@ -71,6 +71,9 @@ def rebuild_index(*, scope: str = "pending", registry=None) -> dict[str, Any]:
 
 
 def delete_item_index(conn: sqlite3.Connection, item_id: int) -> None:
+    # vec0 must be loaded on this connection, otherwise the DELETE below raises
+    # "no such module: vec0", is swallowed, and orphan rows block a re-import.
+    try_enable_vec(conn)
     chunk_ids = [row[0] for row in conn.execute("SELECT id FROM chunk WHERE item_id = ?", (item_id,))]
     for chunk_id in chunk_ids:
         _delete_chunk_rows(conn, int(chunk_id))

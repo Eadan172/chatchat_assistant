@@ -20,8 +20,10 @@ from pydantic import BaseModel, ValidationError
 from app.clarifier.session import ClarifyError, attach_chat_turn, record_plain_turn, resolve_chat_brief
 from app.db.session import open_session
 from app.freshness.policies import apply_chat_freshness
+from app.i18n import locale_from, t
 from app.orchestrator.chat_pipeline import prepare_chat_context, probe_decisions
 from app.retrieval.answer import compose_answer
+from app import styles as style_catalog
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -49,6 +51,8 @@ class ChatBody(BaseModel):
     model: str | None = None
     top_k: int | None = None
     domain_hint: str | None = None
+    locale: str | None = None
+    style: str = "auto"
 
 
 def _user_text(body: ChatBody) -> str:
@@ -61,9 +65,9 @@ def _user_text(body: ChatBody) -> str:
     return ""
 
 
-def _assistant_text(status: str | None) -> str:
+def _assistant_text(status: str | None, locale: str = "zh") -> str:
     label = status or "unknown"
-    return f"已接收澄清结果（{label}）。检索与生成仍是占位，brief 已写入会话。"
+    return t("chat.brief_ack", locale, status=label)
 
 
 async def _parse_body(request: Request) -> ChatBody:
@@ -99,8 +103,9 @@ def _public_hit(hit: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _prepare(body: ChatBody, registry, client=None) -> dict | None:
+def _prepare(body: ChatBody, registry, client=None, locale: str = "zh") -> dict | None:
     text = _user_text(body)
+    style = style_catalog.resolve(body.style, text, locale)
     with open_session() as db:
         try:
             row = resolve_chat_brief(
@@ -127,7 +132,7 @@ def _prepare(body: ChatBody, registry, client=None) -> dict | None:
                 if row is None:
                     return None
                 status = brief.get("status") if brief else None
-                assistant = _assistant_text(str(status) if status else None)
+                assistant = _assistant_text(str(status) if status else None, locale)
                 conversation_id = attach_chat_turn(
                     db,
                     session_row=row,
@@ -152,6 +157,7 @@ def _prepare(body: ChatBody, registry, client=None) -> dict | None:
                     brief=brief,
                     retrieval=_public_retrieval(retrieval, accepted=True),
                     gap=None,
+                    style=style_catalog.public(style, locale),
                 )
             hits = [_public_hit(hit) for hit in retrieval.get("hits") or []]
             freshness = apply_chat_freshness(
@@ -168,6 +174,13 @@ def _prepare(body: ChatBody, registry, client=None) -> dict | None:
                 registry=registry,
                 provider_id=body.provider,
                 model=body.model,
+                locale=locale,
+                style_directive=style_catalog.directive(style),
+            )
+            answer.text = style_catalog.format_offline(
+                answer.text,
+                style,
+                requested=(body.style or "auto") != "auto",
             )
             if freshness.get("note") and freshness["note"] not in answer.text:
                 answer.text = f"{answer.text}\n{freshness['note']}"
@@ -225,6 +238,7 @@ def _prepare(body: ChatBody, registry, client=None) -> dict | None:
                 gap=answer.gap,
                 freshness=freshness.get("events") or [],
                 verify_ms=freshness["ms"] if freshness.get("ran") else None,
+                style=style_catalog.public(style, locale),
             )
         except ClarifyError as exc:
             db.rollback()
@@ -293,10 +307,11 @@ def _safe_decisions(request: Request, body: ChatBody, outcome: dict | None) -> l
 @router.post("")
 async def chat(request: Request) -> StreamingResponse:
     body = await _parse_body(request)
+    locale = locale_from(body.locale, request.headers)
     registry = getattr(request.app.state, "registry", None)
     failed: HTTPException | None = None
     try:
-        outcome = _prepare(body, registry, getattr(request.app.state, "decision_client", None))
+        outcome = _prepare(body, registry, getattr(request.app.state, "decision_client", None), locale)
     except HTTPException as exc:
         outcome = None
         failed = exc
@@ -311,17 +326,17 @@ async def chat(request: Request) -> StreamingResponse:
             for item in outcome.get("freshness") or []:
                 yield _sse("freshness", item)
         if outcome is None:
-            yield _sse("delta", {"text": STUB_TEXT})
-            yield _sse(
-                "done",
-                {
-                    "provider": None,
-                    "model": None,
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "latency_ms": 0,
-                },
-            )
+            yield _sse("delta", {"text": t("chat.stub", locale)})
+            stub_done = {
+                "provider": None,
+                "model": None,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "latency_ms": 0,
+            }
+            if locale != "zh":
+                stub_done["locale"] = locale
+            yield _sse("done", stub_done)
             return
         for hit in outcome["citations"]:
             yield _sse("citation", hit)
@@ -341,6 +356,11 @@ async def chat(request: Request) -> StreamingResponse:
             "conversation_id": outcome["conversation_id"],
             "retrieval": outcome["retrieval"],
         }
+        if locale != "zh":
+            done["locale"] = locale
+        style_public = outcome.get("style")
+        if isinstance(style_public, dict) and style_public.get("id") != "general-plain":
+            done["style"] = style_public
         if outcome["brief_id"] is not None:
             done["brief_id"] = outcome["brief_id"]
             done["brief"] = outcome["brief"]

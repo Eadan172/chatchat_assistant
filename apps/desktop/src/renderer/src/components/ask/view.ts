@@ -30,6 +30,7 @@ export interface AskView {
   notices: string[]
   answer: string
   error: string | null
+  citations?: Citation[]
 }
 
 export function emptyAskView(): AskView {
@@ -44,35 +45,48 @@ export function emptyAskView(): AskView {
   }
 }
 
-export function sourceLabel(source?: string | null): string {
-  if (source === 'web') return '联网'
-  if (source === 'ima' || source === 'connector') return 'ima 知识库'
-  if (source === 'local' || source === 'local_file') return '本地库'
+function pick(locale: string | undefined, zh: string, en: string): string {
+  return locale === 'en' ? en : zh
+}
+
+export function sourceLabel(source?: string | null, locale: string = 'zh'): string {
+  if (source === 'web') return pick(locale, '联网', 'web')
+  if (source === 'ima' || source === 'connector') return pick(locale, 'ima 知识库', 'ima library')
+  if (source === 'local' || source === 'local_file') return pick(locale, '本地库', 'local library')
   return ''
 }
 
-export function askSourceBadge(citation: { source?: string; source_kind?: string; platform?: string }): string | null {
-  if (citation.platform === 'ima' || citation.source === 'ima' || citation.source_kind === 'connector') return '应用知识库'
-  if (citation.platform === 'web' || citation.source === 'web' || citation.source_kind === 'web') return '网络'
+export function askSourceBadge(
+  citation: { source?: string; source_kind?: string; platform?: string },
+  locale: string = 'zh',
+): string | null {
+  if (citation.platform === 'ima' || citation.source === 'ima' || citation.source_kind === 'connector') {
+    return pick(locale, '应用知识库', 'App library')
+  }
+  if (citation.platform === 'web' || citation.source === 'web' || citation.source_kind === 'web') {
+    return pick(locale, '网络', 'Web')
+  }
   if (
     citation.source === 'local' ||
     citation.source_kind === 'local_file' ||
     citation.source_kind === 'local' ||
     citation.platform === 'local_file'
   ) {
-    return '本地库'
+    return pick(locale, '本地库', 'Local')
   }
   return null
 }
 
-export function searchingLabel(sources: string[]): string {
-  const names = sources.map((source) => sourceLabel(source)).filter(Boolean)
-  return names.length ? `正在搜索：${names.join('、')}` : '正在搜索'
+export function searchingLabel(sources: string[], locale: string = 'zh'): string {
+  const names = sources.map((source) => sourceLabel(source, locale)).filter(Boolean)
+  if (!names.length) return pick(locale, '正在搜索', 'Searching')
+  return pick(locale, `正在搜索：${names.join('、')}`, `Searching: ${names.join(', ')}`)
 }
 
-export function searchedLabel(sources: string[]): string {
-  const names = sources.map((source) => sourceLabel(source)).filter(Boolean)
-  return names.length ? `已搜索：${names.join('、')}` : ''
+export function searchedLabel(sources: string[], locale: string = 'zh'): string {
+  const names = sources.map((source) => sourceLabel(source, locale)).filter(Boolean)
+  if (!names.length) return ''
+  return pick(locale, `已搜索：${names.join('、')}`, `Searched: ${names.join(', ')}`)
 }
 
 export function answerAction(draft: string): { action: 'accept' } | { action: 'edit'; value: string } {
@@ -81,10 +95,21 @@ export function answerAction(draft: string): { action: 'accept' } | { action: 'e
   return { action: 'edit', value: text }
 }
 
-export function askRequestBody(message: string, kbName = ''): Record<string, unknown> {
-  const body: Record<string, unknown> = { message, mode: 'personal', clarify: 'auto' }
+export function askRequestBody(
+  message: string,
+  kbName = '',
+  options: { locale?: string; style?: string; conversationId?: number | null } = {},
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    message,
+    mode: 'personal',
+    clarify: 'auto',
+  }
   const named = kbName.trim()
   if (named) body.kb_name = named
+  if (options.locale && options.locale !== 'zh') body.locale = options.locale
+  if (options.style && options.style !== 'auto') body.style = options.style
+  if (options.conversationId != null) body.conversation_id = options.conversationId
   return body
 }
 
@@ -94,73 +119,67 @@ export function canAcceptRecommendation(question: AskQuestion | null | undefined
   return Boolean(question.recommendation.trim())
 }
 
-export function originLabel(origin: AskOrigin): string {
-  const badge = askSourceBadge(origin) || '来源'
-  const name = origin.title || origin.filename || origin.external_id || '未命名'
-  return `${badge} · ${name}`
+export function citationHref(origin: { url?: string } | null | undefined): string {
+  const url = (origin?.url || '').trim()
+  return /^https?:\/\//i.test(url) ? url : ''
 }
 
-export function reduceAskEvent(state: AskView, event: { event: string; data: unknown }): AskView {
-  const data = asRecord(event.data)
+export function reduceAskEvent(
+  state: AskView,
+  event: { event: string; data: unknown },
+): AskView {
+  const data = event.data && typeof event.data === 'object' ? (event.data as Record<string, unknown>) : {}
   if (event.event === 'clarify_question') {
+    const raw = data.question && typeof data.question === 'object' ? (data.question as Record<string, unknown>) : {}
+    const options = Array.isArray(raw.options)
+      ? raw.options.filter((item): item is string => typeof item === 'string')
+      : []
     return {
       ...state,
       phase: 'clarify',
       sessionId: typeof data.session_id === 'number' ? data.session_id : state.sessionId,
-      question: asQuestion(data.question),
-      error: null,
+      question: {
+        id: String(raw.id || ''),
+        text: String(raw.text || ''),
+        recommendation: String(raw.recommendation || ''),
+        reason: String(raw.reason || ''),
+        options,
+      },
     }
   }
   if (event.event === 'searching') {
     return {
       ...state,
       phase: 'searching',
-      question: null,
-      sources: asSources(data.sources),
+      sources: Array.isArray(data.sources)
+        ? data.sources.filter((item): item is string => typeof item === 'string')
+        : state.sources,
     }
   }
   if (event.event === 'notice') {
     const text = typeof data.text === 'string' ? data.text : ''
     return text ? { ...state, notices: [...state.notices, text] } : state
   }
+  if (event.event === 'citation') {
+    const citation = data as unknown as Citation
+    if (!citation || typeof citation !== 'object') return state
+    return { ...state, citations: [...(state.citations || []), citation] }
+  }
   if (event.event === 'delta') {
     const text = typeof data.text === 'string' ? data.text : ''
     return { ...state, phase: 'answer', answer: state.answer + text }
   }
   if (event.event === 'error') {
-    const text = typeof data.text === 'string' ? data.text : '问答没有完成'
-    return { ...state, phase: 'error', error: text }
+    return { ...state, phase: 'error', error: typeof data.text === 'string' ? data.text : state.error }
   }
-  if (event.event === 'done' && data.phase === 'answer') {
+  if (event.event === 'done') {
     return { ...state, phase: 'answer' }
   }
   return state
 }
 
-export function citationHref(citation: Citation | AskOrigin): string {
-  const url = citation.url || ''
-  if (/^https?:\/\//i.test(url)) return url
-  return ''
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
-}
-
-function asQuestion(value: unknown): AskQuestion | null {
-  const row = asRecord(value)
-  if (typeof row.id !== 'string' || typeof row.text !== 'string') return null
-  const options = Array.isArray(row.options) ? row.options.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : []
-  return {
-    id: row.id,
-    text: row.text,
-    recommendation: typeof row.recommendation === 'string' ? row.recommendation : '',
-    reason: typeof row.reason === 'string' ? row.reason : '',
-    options,
-  }
-}
-
-function asSources(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item): item is string => typeof item === 'string')
+export function originLabel(origin: AskOrigin, locale: string = 'zh'): string {
+  const badge = askSourceBadge(origin, locale) || pick(locale, '来源', 'Source')
+  const name = origin.title || origin.filename || origin.external_id || pick(locale, '未命名', 'Untitled')
+  return `${badge} · ${name}`
 }
