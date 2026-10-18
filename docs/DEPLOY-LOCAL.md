@@ -23,7 +23,8 @@
 ## 安装
 
 ```powershell
-cd E:\cursor\grok-bot\chatchat-assistant
+# 先进入仓库根目录（clone 后的目录）
+cd path\to\chatchat-assistant
 
 # 1) Python 依赖（.venv）
 .\scripts\win\01-install-python.ps1
@@ -101,8 +102,9 @@ $env:SIDECAR_TOKEN="devtoken"
 仓库使用 `.data/searxng/settings.yml`（已启用 `html` + `json` 格式，关闭 limiter）：
 
 ```powershell
+# 在仓库根目录执行，${PWD} 会展开为当前目录，无需写死本机路径
 docker run -d --name chatchat-searxng -p 127.0.0.1:8080:8080 `
-  -v "E:\cursor\grok-bot\chatchat-assistant\.data\searxng:/etc/searxng" `
+  -v "${PWD}\.data\searxng:/etc/searxng" `
   --restart unless-stopped searxng/searxng:latest
 ```
 
