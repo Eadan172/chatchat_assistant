@@ -22,6 +22,7 @@ Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $env:CHATCHAT_DISABLE_GPU = '1'
 
 Set-Location $RepoRoot
-Write-Output "DATA_DIR=$($env:DATA_DIR)"
+$shownData = $env:DATA_DIR.Replace($RepoRoot, '<repo>')
+Write-Output "DATA_DIR=$shownData"
 $ErrorActionPreference = 'Continue'
-npm run dev
+npm run dev 2>&1 | ForEach-Object { "$_" }
